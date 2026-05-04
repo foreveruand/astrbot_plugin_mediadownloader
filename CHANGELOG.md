@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.4] - 2026-05-05
+
+### Fixed
+- Added `--js-runtimes node` to all `yt-dlp` invocations so YouTube extraction keeps working with the bundled Node.js runtime from `yt-dlp[node]`.
+
+### Changed
+- Simplified plugin dependencies to use `yt-dlp[node]` as the single `yt-dlp` requirement.
+
 ## [1.2.3] - 2026-05-05
 
 ### Changed

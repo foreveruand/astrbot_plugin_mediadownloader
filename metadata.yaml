@@ -2,5 +2,5 @@ name: astrbot_plugin_mediadownloader
 display_name: Media下载器
 desc: 使用 yt-dlp、gallery-dl 和外部 ktoolbox 命令下载视频、音频或图片，支持下载完毕后通过rclone上传；配置telegram api server后可以下载超50MB的文件
 author: foreveruand
-version: 1.2.3
+version: 1.2.4
 repo: https://github.com/foreveruand/astrbot_plugin_mediadownloader

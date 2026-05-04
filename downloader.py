@@ -20,6 +20,12 @@ import httpx
 logger = logging.getLogger("astrbot")
 
 KEMONO_HOSTS = {"kemono.su", "kemono.cr", "kemono.party"}
+YT_DLP_JS_RUNTIMES = "node"
+
+
+def build_yt_dlp_base_command() -> list[str]:
+    """Build shared yt-dlp arguments required by this plugin."""
+    return ["yt-dlp", "--js-runtimes", YT_DLP_JS_RUNTIMES]
 
 
 async def download_file(url: str, save_path: Path) -> tuple[bool, float]:
@@ -70,7 +76,7 @@ async def get_video_title(link: str) -> tuple[str, str]:
     Returns:
         Tuple of (status, title_or_error)
     """
-    cmd = ["yt-dlp", "--get-title", link]
+    cmd = [*build_yt_dlp_base_command(), "--get-title", link]
 
     process = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -155,7 +161,7 @@ async def download_with_yt_dlp(
         - "failed": Download failed with error message
     """
     command = [
-        "yt-dlp",
+        *build_yt_dlp_base_command(),
         "--print",
         "after_move:filepath",
         "--newline",
