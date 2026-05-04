@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.3] - 2026-05-05
+
+### Changed
+- Removed the Python `ktoolbox` package from plugin dependencies to avoid dependency conflicts.
+- Kept Kemono support by invoking the external `ktoolbox` command instead.
+
+### Fixed
+- Added a clearer error when the external `ktoolbox` command is not installed or not available in `PATH`.
+
 ## [1.2.2] - 2026-05-05
 
 ### Changed

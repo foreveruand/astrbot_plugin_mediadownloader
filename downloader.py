@@ -356,12 +356,16 @@ async def _stream_process_output(
     cwd: Path | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Run a subprocess and stream stdout/stderr lines."""
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=str(cwd) if cwd else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=str(cwd) if cwd else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError:
+        yield ("failed", f"Command not found: {command[0]}")
+        return
 
     assert process.stdout is not None
     while True:

@@ -1,6 +1,6 @@
 # AstrBot Media Downloader Plugin
 
-A video/audio/image downloader plugin for AstrBot using yt-dlp, gallery-dl, and ktoolbox.
+A video/audio/image downloader plugin for AstrBot using yt-dlp and gallery-dl, with optional external `ktoolbox` command support for Kemono downloads.
 
 ## Features
 
@@ -21,9 +21,13 @@ A video/audio/image downloader plugin for AstrBot using yt-dlp, gallery-dl, and 
 1. Place the plugin folder in `data/plugins/astrbot_plugin_mediadownloader/`
 2. Install dependencies:
    ```bash
-  pip install yt-dlp gallery-dl ktoolbox httpx
+  pip install yt-dlp gallery-dl httpx
    ```
-3. Restart AstrBot
+3. If you need Kemono downloads, install `ktoolbox` separately so the `ktoolbox` command is available in `PATH`.
+   ```bash
+   pip install ktoolbox
+   ```
+4. Restart AstrBot
 
 ## Configuration
 
@@ -36,7 +40,7 @@ The settings are grouped into second-level sections:
 - `video_config`
   Contains `yt-dlp` related options like download folders, cookies, proxy, and separate-folder layout.
 - `image_config`
-  Contains local image download path plus `gallery-dl` / `ktoolbox` config and cookies files.
+  Contains local image download path plus `gallery-dl` / external `ktoolbox` config and cookies files.
 - `rclone_config`
   Contains shared upload switch, remote name, video remote folders, and image remote folder.
 
@@ -109,7 +113,7 @@ gallery-dl supports a wide range of image gallery sites, while ktoolbox covers K
 
 - yt-dlp (installed system-wide or via pip)
 - gallery-dl
-- ktoolbox
+- ktoolbox command (optional, only needed for Kemono downloads)
 - FFmpeg (for audio extraction and video merging)
 
 ## License

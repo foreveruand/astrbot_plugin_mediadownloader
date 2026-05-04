@@ -1,4 +1,3 @@
 yt-dlp
 httpx
 gallery-dl
-ktoolbox
