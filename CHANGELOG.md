@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.6] - 2026-05-05
+
+### Fixed
+- Added `--remote-components ejs:github` to all `yt-dlp` invocations so YouTube EJS challenge solver scripts can be fetched when Node-based JS challenge solving is required.
+
 ## [1.2.5] - 2026-05-05
 
 ### Fixed

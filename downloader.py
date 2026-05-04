@@ -21,11 +21,18 @@ logger = logging.getLogger("astrbot")
 
 KEMONO_HOSTS = {"kemono.su", "kemono.cr", "kemono.party"}
 YT_DLP_JS_RUNTIMES = "node"
+YT_DLP_REMOTE_COMPONENTS = "ejs:github"
 
 
 def build_yt_dlp_base_command() -> list[str]:
     """Build shared yt-dlp arguments required by this plugin."""
-    return ["yt-dlp", "--js-runtimes", YT_DLP_JS_RUNTIMES]
+    return [
+        "yt-dlp",
+        "--js-runtimes",
+        YT_DLP_JS_RUNTIMES,
+        "--remote-components",
+        YT_DLP_REMOTE_COMPONENTS,
+    ]
 
 
 async def download_file(url: str, save_path: Path) -> tuple[bool, float]:

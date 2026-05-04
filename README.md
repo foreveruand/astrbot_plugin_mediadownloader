@@ -13,6 +13,7 @@ A video/audio/image downloader plugin for AstrBot using `yt-dlp[node]` and galle
 - Optional rclone upload support
 - Proxy support
 - Uploaded cookies are applied to both metadata lookup and the actual yt-dlp download
+- The plugin enables `yt-dlp` EJS remote components via `--remote-components ejs:github` for YouTube challenge solving
 - Download archive to avoid re-downloading
 - Telegram file upload support (download files directly)
 - Optional separate folder per video
