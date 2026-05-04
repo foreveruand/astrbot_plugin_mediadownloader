@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.5] - 2026-05-05
+
+### Fixed
+- Passed uploaded cookies and proxy settings to the `yt-dlp --get-title` probe so authenticated links no longer fail before download starts.
+- Moved the target URL to the end of the `yt-dlp` command to keep later options such as `--cookies` applied reliably.
+- Made plugin file-path resolution accept both list and string config values for uploaded files.
+
 ## [1.2.4] - 2026-05-05
 
 ### Fixed

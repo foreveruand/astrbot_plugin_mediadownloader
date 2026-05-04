@@ -188,12 +188,19 @@ class Main(star.Star):
         config_value = self._get_video_config().get(config_key)
         if config_value is None:
             config_value = self._get_image_config().get(config_key, [])
-        if config_value and isinstance(config_value, list):
+
+        rel_path = ""
+        if isinstance(config_value, list) and config_value:
+            rel_path = str(config_value[0])
+        elif isinstance(config_value, str):
+            rel_path = config_value
+
+        if rel_path:
             return str(
                 Path(
                     get_astrbot_plugin_data_path(),
                     "astrbot_plugin_mediadownloader",
-                    config_value[0],
+                    rel_path,
                 )
             )
         return ""

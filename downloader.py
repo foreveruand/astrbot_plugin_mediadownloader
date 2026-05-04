@@ -67,16 +67,30 @@ async def download_file(url: str, save_path: Path) -> tuple[bool, float]:
     return False, 0
 
 
-async def get_video_title(link: str) -> tuple[str, str]:
+async def get_video_title(
+    link: str,
+    cookie_file: str = "",
+    proxy_url: str = "",
+) -> tuple[str, str]:
     """Get the title of a video from its URL.
 
     Args:
         link: Video URL
+        cookie_file: Path to cookies file
+        proxy_url: Proxy URL
 
     Returns:
         Tuple of (status, title_or_error)
     """
-    cmd = [*build_yt_dlp_base_command(), "--get-title", link]
+    cmd = [*build_yt_dlp_base_command(), "--get-title"]
+
+    if cookie_file:
+        cmd.extend(["--cookies", cookie_file])
+
+    if proxy_url:
+        cmd.extend(["--proxy", proxy_url])
+
+    cmd.append(link)
 
     process = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -173,7 +187,6 @@ async def download_with_yt_dlp(
         "--no-mtime",
         "-i",
         "--add-metadata",
-        link,
     ]
 
     if cookie_file:
@@ -192,7 +205,9 @@ async def download_with_yt_dlp(
     if "pornhub.com" in link:
         command.extend(["--referer", "https://www.pornhub.com/"])
 
-    _, title = await get_video_title(link)
+    command.append(link)
+
+    _, title = await get_video_title(link, cookie_file, proxy_url)
     last_yield_time = 0.0
 
     process = await asyncio.create_subprocess_exec(

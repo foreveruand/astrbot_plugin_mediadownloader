@@ -12,6 +12,7 @@ A video/audio/image downloader plugin for AstrBot using `yt-dlp[node]` and galle
 - Configurable download folders
 - Optional rclone upload support
 - Proxy support
+- Uploaded cookies are applied to both metadata lookup and the actual yt-dlp download
 - Download archive to avoid re-downloading
 - Telegram file upload support (download files directly)
 - Optional separate folder per video
