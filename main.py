@@ -14,6 +14,8 @@ from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
 from astrbot.api import AstrBotConfig, star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.message_components import File, Record, Video
@@ -290,10 +292,18 @@ class Main(star.Star):
 
         return "\n".join(lines)
 
-    def _send_selection_keyboard(
-        self, event: AstrMessageEvent, session_id: str, selected_idx: int | None = None
-    ) -> MessageEventResult:
-        """Build and return inline keyboard for Telegram platform."""
+    def _build_selection_keyboard_content(
+        self, session_id: str, selected_idx: int | None = None
+    ) -> tuple[str, list[list[dict[str, str]]]]:
+        """Build Telegram selection menu text and inline keyboard.
+
+        Args:
+            session_id: Interactive download session ID.
+            selected_idx: Optional selected folder index override.
+
+        Returns:
+            Menu text and AstrBot inline keyboard data.
+        """
         folders = self._get_download_folders()
         state = SESSION_STATE.get(session_id, {})
         keyboard_session_id = state.get("keyboard_session_id", uuid.uuid4().hex[:8])
@@ -367,24 +377,240 @@ class Main(star.Star):
         )
         default_action = state.get("default_action", "video")
 
-        result = MessageEventResult()
-        result.message(
-            "\n".join(
-                [
-                    "请选择下载目录和配置：",
-                    f"当前目录：{current_folder}",
-                    (
-                        "选项："
-                        f"存档 {'开' if enable_archive else '关'} | "
-                        f"代理 {'开' if use_proxy else '关'} | "
-                        f"独立文件夹 {'开' if separate_folder else '关'} | "
-                        f"默认 {'音频' if default_action == 'audio' else '视频'}"
-                    ),
-                ]
-            )
+        text = "\n".join(
+            [
+                "请选择下载目录和配置：",
+                f"当前目录：{current_folder}",
+                (
+                    "选项："
+                    f"存档 {'开' if enable_archive else '关'} | "
+                    f"代理 {'开' if use_proxy else '关'} | "
+                    f"独立文件夹 {'开' if separate_folder else '关'} | "
+                    f"默认 {'音频' if default_action == 'audio' else '视频'}"
+                ),
+            ]
         )
+        return text, keyboard
+
+    def _send_selection_keyboard(
+        self, event: AstrMessageEvent, session_id: str, selected_idx: int | None = None
+    ) -> MessageEventResult:
+        """Build and return inline keyboard for Telegram platform."""
+        text, keyboard = self._build_selection_keyboard_content(
+            session_id, selected_idx
+        )
+        result = MessageEventResult()
+        result.message(text)
         result.inline_keyboard(keyboard)
         return result
+
+    def _get_telegram_chat_payload(self, event: AstrMessageEvent) -> dict[str, Any]:
+        """Build Telegram chat payload for the event session.
+
+        Args:
+            event: AstrBot message event from Telegram.
+
+        Returns:
+            Telegram API chat payload with optional thread ID.
+        """
+        chat_id = event.get_sender_id()
+        message_thread_id = None
+        if event.get_message_type().name == "GROUP_MESSAGE":
+            chat_id = getattr(event.message_obj, "group_id", chat_id)
+        if "#" in str(chat_id):
+            chat_id, message_thread_id = str(chat_id).split("#", 1)
+
+        payload: dict[str, Any] = {"chat_id": chat_id}
+        if message_thread_id:
+            payload["message_thread_id"] = message_thread_id
+        return payload
+
+    def _build_telegram_reply_markup(
+        self, keyboard: list[list[dict[str, str]]]
+    ) -> InlineKeyboardMarkup:
+        """Convert AstrBot inline keyboard data to Telegram markup.
+
+        Args:
+            keyboard: AstrBot inline keyboard data.
+
+        Returns:
+            Telegram inline keyboard markup.
+        """
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton(**button) for button in row] for row in keyboard]
+        )
+
+    async def _send_telegram_selection_menu(
+        self, event: AstrMessageEvent, session_id: str, selected_idx: int | None = None
+    ) -> bool:
+        """Send Telegram selection menu directly and store message identity.
+
+        Args:
+            event: Telegram message event used for chat routing.
+            session_id: Interactive download session ID.
+            selected_idx: Optional selected folder index override.
+
+        Returns:
+            Whether the Telegram menu was sent and tracked.
+        """
+        client = getattr(event, "client", None)
+        if client is None:
+            return False
+
+        text, keyboard = self._build_selection_keyboard_content(
+            session_id, selected_idx
+        )
+        payload = self._get_telegram_chat_payload(event)
+        try:
+            message = await client.send_message(
+                text=text,
+                reply_markup=self._build_telegram_reply_markup(keyboard),
+                **payload,
+            )
+        except Exception as exc:  # pragma: no cover - platform specific
+            logger.warning(f"Telegram selection menu send failed: {exc}")
+            return False
+
+        state = SESSION_STATE.get(session_id)
+        if state is not None:
+            state["telegram_menu"] = {
+                "chat_id": payload["chat_id"],
+                "message_id": message.message_id,
+            }
+            if payload.get("message_thread_id"):
+                state["telegram_menu"]["message_thread_id"] = payload[
+                    "message_thread_id"
+                ]
+        return True
+
+    async def _send_telegram_session_message(
+        self, event: AstrMessageEvent, session_id: str, text: str
+    ) -> bool:
+        """Send a Telegram session message and store message identity.
+
+        Args:
+            event: Telegram message event used for chat routing.
+            session_id: Interactive download session ID.
+            text: Message text to send.
+
+        Returns:
+            Whether the Telegram message was sent and tracked.
+        """
+        client = getattr(event, "client", None)
+        if client is None:
+            return False
+
+        payload = self._get_telegram_chat_payload(event)
+        try:
+            message = await client.send_message(text=text, **payload)
+        except Exception as exc:  # pragma: no cover - platform specific
+            logger.warning(f"Telegram session message send failed: {exc}")
+            return False
+
+        state = SESSION_STATE.get(session_id)
+        if state is not None:
+            state["telegram_menu"] = {
+                "chat_id": payload["chat_id"],
+                "message_id": message.message_id,
+            }
+            if payload.get("message_thread_id"):
+                state["telegram_menu"]["message_thread_id"] = payload[
+                    "message_thread_id"
+                ]
+        return True
+
+    async def _delete_telegram_user_message(self, event: AstrMessageEvent) -> None:
+        """Delete the Telegram user reply when possible.
+
+        Args:
+            event: Telegram message event to delete.
+        """
+        client = getattr(event, "client", None)
+        message_id = getattr(event.message_obj, "message_id", None)
+        if client is None or not message_id:
+            return
+
+        payload = self._get_telegram_chat_payload(event)
+        try:
+            await client.delete_message(
+                chat_id=payload["chat_id"], message_id=int(message_id)
+            )
+        except Exception as exc:  # pragma: no cover - platform specific
+            logger.debug(f"Telegram user message delete failed: {exc}")
+
+    async def _refresh_telegram_selection_menu(
+        self,
+        event: AstrMessageEvent,
+        session_id: str,
+        selected_idx: int | None = None,
+        status: str = "",
+    ) -> bool:
+        """Edit the stored Telegram selection menu or send a replacement.
+
+        Args:
+            event: Telegram message event used for fallback chat routing.
+            session_id: Interactive download session ID.
+            selected_idx: Optional selected folder index override.
+            status: Optional status line prepended to the menu text.
+
+        Returns:
+            Whether the menu was edited or replaced.
+        """
+        client = getattr(event, "client", None)
+        if client is None:
+            return False
+
+        state = SESSION_STATE.get(session_id, {})
+        text, keyboard = self._build_selection_keyboard_content(
+            session_id, selected_idx
+        )
+        if status:
+            text = f"{status}\n\n{text}"
+
+        menu = state.get("telegram_menu")
+        if menu:
+            try:
+                await client.edit_message_text(
+                    text=text,
+                    chat_id=menu["chat_id"],
+                    message_id=menu["message_id"],
+                    reply_markup=self._build_telegram_reply_markup(keyboard),
+                )
+                return True
+            except Exception as exc:  # pragma: no cover - platform specific
+                logger.warning(f"Telegram selection menu edit failed: {exc}")
+
+        return await self._send_telegram_selection_menu(event, session_id, selected_idx)
+
+    async def _finish_telegram_selection_menu(
+        self, event: AstrMessageEvent, session_id: str, text: str
+    ) -> bool:
+        """Edit the stored Telegram selection menu to a terminal state.
+
+        Args:
+            event: Telegram message event kept for client access.
+            session_id: Interactive download session ID.
+            text: Final message text.
+
+        Returns:
+            Whether the tracked message was edited.
+        """
+        client = getattr(event, "client", None)
+        menu = SESSION_STATE.get(session_id, {}).get("telegram_menu")
+        if client is None or not menu:
+            return False
+
+        try:
+            await client.edit_message_text(
+                text=text,
+                chat_id=menu["chat_id"],
+                message_id=menu["message_id"],
+                reply_markup=None,
+            )
+            return True
+        except Exception as exc:  # pragma: no cover - platform specific
+            logger.warning(f"Telegram selection menu finish failed: {exc}")
+            return False
 
     def _init_session_state(
         self, session_id: str, default_action: str
@@ -444,20 +670,28 @@ class Main(star.Star):
             return
 
         if state["stage"] == "await_file":
-            yield event.plain_result(
+            await_file_message = (
                 "📤 请上传文件或发送下载链接。\n"
                 f"保存文件名：{state['filename_hint']}\n"
                 "回复 '取消' 退出。"
             )
+            if event.get_platform_name() == "telegram":
+                if not await self._send_telegram_session_message(
+                    event, session_id, await_file_message
+                ):
+                    yield event.plain_result(await_file_message)
+            else:
+                yield event.plain_result(await_file_message)
         else:
             # Check if platform is Telegram - use inline keyboard
             if event.get_platform_name() == "telegram":
-                result = self._send_selection_keyboard(event, session_id)
-                event.set_result(result)
-                return
+                if not await self._send_telegram_selection_menu(event, session_id):
+                    result = self._send_selection_keyboard(event, session_id)
+                    event.set_result(result)
 
-            msg = self._build_selection_message(session_id)
-            yield event.plain_result(msg)
+            else:
+                msg = self._build_selection_message(session_id)
+                yield event.plain_result(msg)
 
         @session_waiter(timeout=SESSION_TIMEOUT)
         async def wait_for_reply(
@@ -470,9 +704,19 @@ class Main(star.Star):
                 return
 
             reply_text = reply_event.message_str.strip()
+            is_telegram = reply_event.get_platform_name() == "telegram"
+
+            if is_telegram:
+                await self._delete_telegram_user_message(reply_event)
 
             if reply_text.lower() in ("取消", "cancel", "退出", "exit"):
-                await reply_event.send(reply_event.plain_result("已取消操作。"))
+                if is_telegram:
+                    if not await self._finish_telegram_selection_menu(
+                        reply_event, session_id, "❌ 已取消操作"
+                    ):
+                        await reply_event.send(reply_event.plain_result("已取消操作。"))
+                else:
+                    await reply_event.send(reply_event.plain_result("已取消操作。"))
                 SESSION_STATE.pop(session_id, None)
                 controller.stop()
                 return
@@ -492,24 +736,34 @@ class Main(star.Star):
                 elif file_urls:
                     current_state.update({"mode": "file", "file_urls": file_urls})
                 else:
-                    await reply_event.send(
-                        reply_event.plain_result(
-                            "请发送文件或有效的下载链接，或回复 '取消' 退出。"
+                    if is_telegram:
+                        if not await self._finish_telegram_selection_menu(
+                            reply_event,
+                            session_id,
+                            "⚠️ 请发送文件或有效的下载链接，或回复 '取消' 退出。\n"
+                            f"保存文件名：{current_state['filename_hint']}",
+                        ):
+                            await reply_event.send(
+                                reply_event.plain_result(
+                                    "请发送文件或有效的下载链接，或回复 '取消' 退出。"
+                                )
+                            )
+                    else:
+                        await reply_event.send(
+                            reply_event.plain_result(
+                                "请发送文件或有效的下载链接，或回复 '取消' 退出。"
+                            )
                         )
-                    )
                     return
 
                 current_state["stage"] = "select"
                 # Check if platform is Telegram - use inline keyboard
-                if reply_event.get_platform_name() == "telegram":
-                    current_state["keyboard_pending"] = True
-                    result = self._send_selection_keyboard(
+                if is_telegram:
+                    await self._refresh_telegram_selection_menu(
                         reply_event,
                         session_id,
                         current_state.get("selected_folder_idx", 0),
                     )
-                    reply_event.set_result(result)
-                    controller.stop()
                 else:
                     msg = self._build_selection_message(
                         session_id, current_state.get("selected_folder_idx", 0)
@@ -523,42 +777,76 @@ class Main(star.Star):
                 idx = int(reply_text) - 1
                 if 0 <= idx < len(folders):
                     current_state["selected_folder_idx"] = idx
-                    msg = self._build_selection_message(session_id, idx)
-                    await reply_event.send(reply_event.plain_result(msg))
-                else:
-                    await reply_event.send(
-                        reply_event.plain_result(
-                            f"❌ 无效的目录序号，请选择 1-{len(folders)}"
+                    if is_telegram:
+                        await self._refresh_telegram_selection_menu(
+                            reply_event, session_id, idx
                         )
-                    )
+                    else:
+                        msg = self._build_selection_message(session_id, idx)
+                        await reply_event.send(reply_event.plain_result(msg))
+                else:
+                    if is_telegram:
+                        await self._refresh_telegram_selection_menu(
+                            reply_event,
+                            session_id,
+                            current_state.get("selected_folder_idx", 0),
+                            f"❌ 无效的目录序号，请选择 1-{len(folders)}",
+                        )
+                    else:
+                        await reply_event.send(
+                            reply_event.plain_result(
+                                f"❌ 无效的目录序号，请选择 1-{len(folders)}"
+                            )
+                        )
                 return
 
             if reply_text in ("存档",):
                 current_state["enable_archive"] = not current_state.get(
                     "enable_archive", True
                 )
-                msg = self._build_selection_message(
-                    session_id, current_state.get("selected_folder_idx", 0)
-                )
-                await reply_event.send(reply_event.plain_result(msg))
+                if is_telegram:
+                    await self._refresh_telegram_selection_menu(
+                        reply_event,
+                        session_id,
+                        current_state.get("selected_folder_idx", 0),
+                    )
+                else:
+                    msg = self._build_selection_message(
+                        session_id, current_state.get("selected_folder_idx", 0)
+                    )
+                    await reply_event.send(reply_event.plain_result(msg))
                 return
 
             if reply_text in ("代理",):
                 current_state["use_proxy"] = not current_state.get("use_proxy", False)
-                msg = self._build_selection_message(
-                    session_id, current_state.get("selected_folder_idx", 0)
-                )
-                await reply_event.send(reply_event.plain_result(msg))
+                if is_telegram:
+                    await self._refresh_telegram_selection_menu(
+                        reply_event,
+                        session_id,
+                        current_state.get("selected_folder_idx", 0),
+                    )
+                else:
+                    msg = self._build_selection_message(
+                        session_id, current_state.get("selected_folder_idx", 0)
+                    )
+                    await reply_event.send(reply_event.plain_result(msg))
                 return
 
             if reply_text in ("独立", "独立文件夹"):
                 current_state["video_separate_folder"] = not current_state.get(
                     "video_separate_folder", False
                 )
-                msg = self._build_selection_message(
-                    session_id, current_state.get("selected_folder_idx", 0)
-                )
-                await reply_event.send(reply_event.plain_result(msg))
+                if is_telegram:
+                    await self._refresh_telegram_selection_menu(
+                        reply_event,
+                        session_id,
+                        current_state.get("selected_folder_idx", 0),
+                    )
+                else:
+                    msg = self._build_selection_message(
+                        session_id, current_state.get("selected_folder_idx", 0)
+                    )
+                    await reply_event.send(reply_event.plain_result(msg))
                 return
 
             if reply_text in ("视频", "音频", "开始", "下载"):
@@ -572,6 +860,7 @@ class Main(star.Star):
                 audio_only = action == "音频"
 
                 controller.stop()
+                current_state["keyboard_pending"] = False
                 if current_state.get("mode") == "file":
                     await self._handle_file_download(reply_event, current_state)
                 else:
@@ -584,16 +873,33 @@ class Main(star.Star):
                     await self._handle_download(
                         reply_event, url, current_state, audio_only
                     )
+                SESSION_STATE.pop(session_id, None)
                 return
 
-            await reply_event.send(
-                reply_event.plain_result("⚠️ 无效输入，请按提示回复或回复 '取消' 退出")
-            )
+            if is_telegram:
+                await self._refresh_telegram_selection_menu(
+                    reply_event,
+                    session_id,
+                    current_state.get("selected_folder_idx", 0),
+                    "⚠️ 无效输入，请按提示回复或回复 '取消' 退出",
+                )
+            else:
+                await reply_event.send(
+                    reply_event.plain_result(
+                        "⚠️ 无效输入，请按提示回复或回复 '取消' 退出"
+                    )
+                )
 
         try:
             await wait_for_reply(event)
         except TimeoutError:
-            yield event.plain_result("⏰ 等待超时，操作已取消。")
+            if event.get_platform_name() == "telegram":
+                if not await self._finish_telegram_selection_menu(
+                    event, session_id, "⏰ 等待超时，操作已取消。"
+                ):
+                    yield event.plain_result("⏰ 等待超时，操作已取消。")
+            else:
+                yield event.plain_result("⏰ 等待超时，操作已取消。")
         finally:
             state = SESSION_STATE.get(session_id)
             if not state or not state.get("keyboard_pending"):

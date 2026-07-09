@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.7] - 2026-07-09
+
+### Changed
+- Telegram text and file replies now delete the user's reply when possible and refresh the existing interactive menu message instead of appending new menu messages.
+
 ## [1.2.6] - 2026-05-05
 
 ### Fixed

@@ -97,7 +97,7 @@ After sending a URL, you can:
 6. Reply "音频" to download audio only
 7. Reply "开始" to download using the default mode
 
-On Telegram, the inline keyboard message will refresh the current folder and option summary after each click so the visible selection marker stays in sync with the effective download settings.
+On Telegram, inline button clicks and text/file replies refresh the existing interactive menu message when possible. User reply messages are deleted when Telegram permits it, keeping the chat focused on the current menu state.
 
 ## Supported Platforms
 
