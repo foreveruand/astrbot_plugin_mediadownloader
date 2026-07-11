@@ -97,7 +97,7 @@ After sending a URL, you can:
 6. Reply "音频" to download audio only
 7. Reply "开始" to download using the default mode
 
-On Telegram, inline button clicks and text/file replies refresh the existing interactive menu message when possible. User reply messages are deleted when Telegram permits it, keeping the chat focused on the current menu state.
+On Telegram, inline button clicks and text/file replies refresh the existing interactive menu message when possible. User reply messages are deleted when Telegram permits it and are consumed by the downloader session, so they do not trigger an LLM response.
 
 ## Supported Platforms
 

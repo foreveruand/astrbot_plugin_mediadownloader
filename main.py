@@ -707,6 +707,7 @@ class Main(star.Star):
             is_telegram = reply_event.get_platform_name() == "telegram"
 
             if is_telegram:
+                reply_event.stop_event()
                 await self._delete_telegram_user_message(reply_event)
 
             if reply_text.lower() in ("取消", "cancel", "退出", "exit"):

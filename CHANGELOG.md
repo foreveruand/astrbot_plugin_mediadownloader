@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.8] - 2026-07-11
+
+### Fixed
+- Consumed Telegram text and file replies handled by the interactive downloader session so folder selections and other menu input no longer trigger an LLM response.
+
 ## [1.2.7] - 2026-07-09
 
 ### Changed
