@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-07-25
+
+### Added
+- Added configurable per-download Clash proxy-group node selection with in-memory session state and automatic restoration of the original node.
+
+### Fixed
+- Streamed yt-dlp progress from both standard output and standard error while preserving rate-limited progress delivery.
+
 ## [1.2.9] - 2026-07-25
 
 ### Fixed

@@ -88,19 +88,20 @@ def format_ytdlp_progress(line: str) -> str | None:
     ):
         return None
 
-    # Progress line pattern: percentage, total size, speed, ETA
+    # yt-dlp may omit speed or ETA, especially near completion.
     progress_pattern = re.compile(
-        r"\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+[\s~]*([\d.]+(?:[KMGT]i?B)?)\s+at\s+([\d.]+\w+/s)\s+ETA\s+(\d+:\d+)"
+        r"\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?\s*(\S+)"
+        r"(?:\s+at\s+(\S+))?(?:\s+ETA\s+(\S+))?"
     )
     match = progress_pattern.search(line)
     if match:
         percent = match.group(1)
-        total_size = match.group(2).replace("~", "")
-        speed = match.group(3)
-        eta = match.group(4)
-        return (
-            f"Progress: {percent}% | Size: {total_size} | Speed: {speed} | ETA: {eta}"
-        )
+        details = [f"Progress: {percent}%", f"Size: {match.group(2)}"]
+        if match.group(3):
+            details.append(f"Speed: {match.group(3)}")
+        if match.group(4):
+            details.append(f"ETA: {match.group(4)}")
+        return " | ".join(details)
 
     # Metadata pattern
     metadata_pattern = re.compile(r'\[Metadata\]\sAdding\smetadata\sto\s"(.*)"')
@@ -146,6 +147,7 @@ async def download_with_yt_dlp(
         "--print",
         "after_move:filepath",
         "--newline",
+        "--progress",
         "--extractor-args",
         "youtube:lang=zh-CN",
         "-o",
@@ -211,11 +213,11 @@ async def download_with_yt_dlp(
 
             now = time.monotonic()
 
-            if stream == "stdout":
-                decoded_output = output.decode("utf-8", errors="replace").strip()
-                formatted = format_ytdlp_progress(decoded_output)
-                logger.debug(f"yt-dlp: {decoded_output}\n{formatted}")
+            decoded_output = output.decode("utf-8", errors="replace").strip()
+            formatted = format_ytdlp_progress(decoded_output)
+            logger.debug(f"yt-dlp ({stream}): {decoded_output}\n{formatted}")
 
+            if stream == "stdout":
                 if os.path.exists(decoded_output):
                     yield ("save_path", decoded_output)
                 elif formatted and (now - last_yield_time >= interval):
@@ -223,7 +225,12 @@ async def download_with_yt_dlp(
                     yield ("progress", formatted)
 
             else:
-                error_msg = output.decode("utf-8", errors="replace").strip()
+                if formatted:
+                    if now - last_yield_time >= interval:
+                        last_yield_time = now
+                        yield ("progress", formatted)
+                    continue
+                error_msg = decoded_output
                 if "ERROR" in error_msg:
                     failed = True
                     yield (

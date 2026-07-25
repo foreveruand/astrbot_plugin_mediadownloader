@@ -17,6 +17,8 @@ A video/audio/image downloader plugin for AstrBot using `yt-dlp[node]` and galle
 - Download archive to avoid re-downloading
 - Telegram file upload support (download files directly)
 - Optional separate folder per video
+- Real-time yt-dlp progress updates with rate-limited message edits
+- Per-download Clash proxy-group node selection and automatic restoration
 
 ## Installation
 
@@ -41,7 +43,7 @@ The settings are grouped into second-level sections:
 - `common_config`
   Enables shared behaviors such as download archive.
 - `video_config`
-  Contains `yt-dlp` related options like download folders, cookies, proxy, and separate-folder layout.
+  Contains `yt-dlp` related options like download folders, cookies, proxy, separate-folder layout, and optional Clash node switching. To enable Clash selection, configure all of `clash_controller_url`, `clash_proxy_group`, and `clash_nodes`. Only the configured node list is shown; the plugin reads the group's current node when the menu opens, switches before yt-dlp starts, and restores that node when the download ends.
 - `image_config`
   Contains local image download path plus `gallery-dl` / external `ktoolbox` config and cookies files.
 - `rclone_config`
@@ -93,11 +95,12 @@ After sending a URL, you can:
 2. Reply "存档" to toggle archive option
 3. Reply "代理" to toggle proxy option
 4. Reply "独立文件夹" to toggle per-video folder layout
-5. Reply "视频" to download video
-6. Reply "音频" to download audio only
-7. Reply "开始" to download using the default mode
+5. Reply `Clash节点 <序号>` to choose a configured Clash node when enabled
+6. Reply "视频" to download video
+7. Reply "音频" to download audio only
+8. Reply "开始" to download using the default mode
 
-On Telegram, inline button clicks and text/file replies use the same interactive session, refresh the existing menu message when possible, and stop the session when a download begins. User reply messages are deleted when Telegram permits it and are consumed by the downloader session, so they do not trigger an LLM response.
+On Telegram, inline button clicks and text/file replies use the same interactive session, refresh the existing menu message when possible, and stop the session when a download begins. Configured Clash nodes appear in one button row, with the current group node selected by default when it is in the configured list. User reply messages are deleted when Telegram permits it and are consumed by the downloader session, so they do not trigger an LLM response.
 
 ## Supported Platforms
 

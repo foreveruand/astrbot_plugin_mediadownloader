@@ -13,7 +13,9 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from astrbot.api import AstrBotConfig, star
@@ -179,6 +181,93 @@ class Main(star.Star):
     def _get_video_config(self) -> dict[str, Any]:
         return self._get_section("video_config")
 
+    def _get_clash_config(self) -> tuple[str, str, list[str]]:
+        """Return the configured Clash controller, group, and allowed nodes.
+
+        Returns:
+            Tuple containing controller URL, proxy group name, and allowed node names.
+        """
+        video_config = self._get_video_config()
+        raw_nodes = video_config.get("clash_nodes", [])
+        nodes = (
+            [str(node).strip() for node in raw_nodes if str(node).strip()]
+            if isinstance(raw_nodes, list)
+            else []
+        )
+        return (
+            str(video_config.get("clash_controller_url", "")).rstrip("/"),
+            str(video_config.get("clash_proxy_group", "")).strip(),
+            nodes,
+        )
+
+    def _has_clash_config(self) -> bool:
+        """Return whether Clash node switching is fully configured.
+
+        Returns:
+            Whether the controller URL, proxy group, and allowed nodes are configured.
+        """
+        controller_url, group_name, nodes = self._get_clash_config()
+        return bool(controller_url and group_name and nodes)
+
+    async def _refresh_clash_menu_state(self, state: dict[str, Any]) -> None:
+        """Fetch the current Clash node and initialize a menu selection when possible.
+
+        Args:
+            state: Ephemeral interactive download state.
+        """
+        if not self._has_clash_config():
+            return
+
+        current_node, error = await self._get_current_clash_node()
+        state["clash_current_node"] = current_node
+        state["clash_error"] = error
+        _, _, nodes = self._get_clash_config()
+        if "clash_selected_node" not in state and current_node in nodes:
+            state["clash_selected_node"] = current_node
+
+    async def _get_current_clash_node(self) -> tuple[str, str]:
+        """Read the active node of the configured Clash proxy group.
+
+        Returns:
+            Tuple containing the active node name and an error message when unavailable.
+        """
+        controller_url, group_name, _ = self._get_clash_config()
+        endpoint = f"{controller_url}/proxies/{quote(group_name, safe='')}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(endpoint)
+                response.raise_for_status()
+            current_node = response.json().get("now")
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning(f"Unable to read Clash proxy group {group_name}: {exc}")
+            return "", f"无法读取 Clash 当前节点：{exc}"
+
+        if not isinstance(current_node, str) or not current_node:
+            return "", "Clash 策略组未返回当前节点"
+        return current_node, ""
+
+    async def _switch_clash_node(self, node_name: str) -> str:
+        """Switch the configured Clash proxy group to a node.
+
+        Args:
+            node_name: Node name to select for the configured proxy group.
+
+        Returns:
+            Empty text on success, otherwise a user-facing error message.
+        """
+        controller_url, group_name, _ = self._get_clash_config()
+        endpoint = f"{controller_url}/proxies/{quote(group_name, safe='')}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.put(endpoint, json={"name": node_name})
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning(
+                f"Unable to switch Clash proxy group {group_name} to {node_name}: {exc}"
+            )
+            return f"无法切换 Clash 节点：{exc}"
+        return ""
+
     def _get_image_config(self) -> dict[str, Any]:
         return self._get_section("image_config")
 
@@ -273,12 +362,18 @@ class Main(star.Star):
             self._get_video_config().get("video_seperate_folder", False),
         )
         default_action = state.get("default_action", "video")
+        clash_enabled = self._has_clash_config()
+        clash_current_node = state.get("clash_current_node", "")
+        clash_selected_node = state.get("clash_selected_node", "")
 
         lines.append("\n配置选项：")
         lines.append(f"- 存档: {'开' if enable_archive else '关'}")
         lines.append(f"- 代理: {'开' if use_proxy else '关'}")
         lines.append(f"- 独立文件夹: {'开' if separate_folder else '关'}")
         lines.append(f"- 默认下载: {'音频' if default_action == 'audio' else '视频'}")
+        if clash_enabled:
+            lines.append(f"- Clash 当前节点: {clash_current_node or '读取失败'}")
+            lines.append(f"- Clash 下载节点: {clash_selected_node or '请选择'}")
 
         lines.append("\n回复说明：")
         lines.append(f"- 数字(1-{len(folders)}): 选择目录")
@@ -288,6 +383,8 @@ class Main(star.Star):
         lines.append("- 视频: 开始下载视频")
         lines.append("- 音频: 仅下载音频")
         lines.append("- 开始: 使用默认模式下载")
+        if clash_enabled:
+            lines.append("- Clash节点 <序号>: 选择本次下载使用的 Clash 节点")
         lines.append("- 取消: 退出当前会话")
 
         return "\n".join(lines)
@@ -321,6 +418,9 @@ class Main(star.Star):
             "video_separate_folder",
             self._get_video_config().get("video_seperate_folder", False),
         )
+        clash_enabled = self._has_clash_config()
+        clash_current_node = state.get("clash_current_node", "")
+        clash_selected_node = state.get("clash_selected_node", "")
 
         keyboard = []
 
@@ -353,6 +453,21 @@ class Main(star.Star):
                 },
             ]
         )
+
+        if clash_enabled:
+            _, _, clash_nodes = self._get_clash_config()
+            keyboard.append(
+                [
+                    {
+                        "text": (
+                            f"{'✅ ' if node_name == clash_selected_node else ''}"
+                            f"Clash {node_name}"
+                        ),
+                        "callback_data": f"vd:{keyboard_session_id}:clash:{idx}",
+                    }
+                    for idx, node_name in enumerate(clash_nodes)
+                ]
+            )
 
         # Action buttons row
         keyboard.append(
@@ -387,6 +502,14 @@ class Main(star.Star):
                     f"代理 {'开' if use_proxy else '关'} | "
                     f"独立文件夹 {'开' if separate_folder else '关'} | "
                     f"默认 {'音频' if default_action == 'audio' else '视频'}"
+                ),
+                *(
+                    [
+                        f"Clash 当前：{clash_current_node or '读取失败'}",
+                        f"Clash 下载节点：{clash_selected_node or '请选择'}",
+                    ]
+                    if clash_enabled
+                    else []
                 ),
             ]
         )
@@ -457,6 +580,9 @@ class Main(star.Star):
         if client is None:
             return False
 
+        state = SESSION_STATE.get(session_id)
+        if state is not None:
+            await self._refresh_clash_menu_state(state)
         text, keyboard = self._build_selection_keyboard_content(
             session_id, selected_idx
         )
@@ -561,6 +687,7 @@ class Main(star.Star):
             return False
 
         state = SESSION_STATE.get(session_id, {})
+        await self._refresh_clash_menu_state(state)
         text, keyboard = self._build_selection_keyboard_content(
             session_id, selected_idx
         )
@@ -686,10 +813,12 @@ class Main(star.Star):
             # Check if platform is Telegram - use inline keyboard
             if event.get_platform_name() == "telegram":
                 if not await self._send_telegram_selection_menu(event, session_id):
+                    await self._refresh_clash_menu_state(state)
                     result = self._send_selection_keyboard(event, session_id)
                     event.set_result(result)
 
             else:
+                await self._refresh_clash_menu_state(state)
                 msg = self._build_selection_message(session_id)
                 yield event.plain_result(msg)
 
@@ -766,6 +895,7 @@ class Main(star.Star):
                         current_state.get("selected_folder_idx", 0),
                     )
                 else:
+                    await self._refresh_clash_menu_state(current_state)
                     msg = self._build_selection_message(
                         session_id, current_state.get("selected_folder_idx", 0)
                     )
@@ -773,6 +903,32 @@ class Main(star.Star):
                 return
 
             folders = self._get_download_folders()
+
+            clash_match = re.fullmatch(r"Clash节点\s+(\d+)", reply_text)
+            if clash_match and self._has_clash_config():
+                _, _, clash_nodes = self._get_clash_config()
+                clash_idx = int(clash_match.group(1)) - 1
+                if not 0 <= clash_idx < len(clash_nodes):
+                    await reply_event.send(
+                        reply_event.plain_result(
+                            f"❌ 无效的 Clash 节点序号，请选择 1-{len(clash_nodes)}"
+                        )
+                    )
+                    return
+                current_state["clash_selected_node"] = clash_nodes[clash_idx]
+                if is_telegram:
+                    await self._refresh_telegram_selection_menu(
+                        reply_event,
+                        session_id,
+                        current_state.get("selected_folder_idx", 0),
+                    )
+                else:
+                    await self._refresh_clash_menu_state(current_state)
+                    msg = self._build_selection_message(
+                        session_id, current_state.get("selected_folder_idx", 0)
+                    )
+                    await reply_event.send(reply_event.plain_result(msg))
+                return
 
             if reply_text.isdigit():
                 idx = int(reply_text) - 1
@@ -783,6 +939,7 @@ class Main(star.Star):
                             reply_event, session_id, idx
                         )
                     else:
+                        await self._refresh_clash_menu_state(current_state)
                         msg = self._build_selection_message(session_id, idx)
                         await reply_event.send(reply_event.plain_result(msg))
                 else:
@@ -812,6 +969,7 @@ class Main(star.Star):
                         current_state.get("selected_folder_idx", 0),
                     )
                 else:
+                    await self._refresh_clash_menu_state(current_state)
                     msg = self._build_selection_message(
                         session_id, current_state.get("selected_folder_idx", 0)
                     )
@@ -827,6 +985,7 @@ class Main(star.Star):
                         current_state.get("selected_folder_idx", 0),
                     )
                 else:
+                    await self._refresh_clash_menu_state(current_state)
                     msg = self._build_selection_message(
                         session_id, current_state.get("selected_folder_idx", 0)
                     )
@@ -844,6 +1003,7 @@ class Main(star.Star):
                         current_state.get("selected_folder_idx", 0),
                     )
                 else:
+                    await self._refresh_clash_menu_state(current_state)
                     msg = self._build_selection_message(
                         session_id, current_state.get("selected_folder_idx", 0)
                     )
@@ -964,6 +1124,19 @@ class Main(star.Star):
             event.message_str = str(idx + 1)
             await event.answer_callback_query(text=f"已选择: {folders[idx]}")
 
+        elif action_type == "clash":
+            _, _, clash_nodes = self._get_clash_config()
+            try:
+                clash_idx = int(action_value)
+            except ValueError:
+                await event.answer_callback_query(text="无效的 Clash 节点选择")
+                return
+            if not self._has_clash_config() or not 0 <= clash_idx < len(clash_nodes):
+                await event.answer_callback_query(text="无效的 Clash 节点选择")
+                return
+            event.message_str = f"Clash节点 {clash_idx + 1}"
+            await event.answer_callback_query(text=f"已选择: {clash_nodes[clash_idx]}")
+
         elif action_type == "toggle":
             toggle_text = {
                 "archive": "存档",
@@ -1055,6 +1228,29 @@ class Main(star.Star):
         )
         archive_path = str(Path(get_astrbot_data_path(), "archive.txt"))
 
+        clash_original_node = ""
+        clash_selected_node = state.get("clash_selected_node", "")
+        clash_switched = False
+        if self._has_clash_config():
+            _, _, clash_nodes = self._get_clash_config()
+            if clash_selected_node not in clash_nodes:
+                await event.send(
+                    event.plain_result("❌ 请先在下载菜单中选择一个 Clash 节点")
+                )
+                return
+
+            clash_original_node, clash_error = await self._get_current_clash_node()
+            if clash_error:
+                await event.send(event.plain_result(f"❌ {clash_error}"))
+                return
+
+            if clash_selected_node != clash_original_node:
+                clash_error = await self._switch_clash_node(clash_selected_node)
+                if clash_error:
+                    await event.send(event.plain_result(f"❌ {clash_error}"))
+                    return
+                clash_switched = True
+
         downloaded_files: list[str] = []
         last_error: str | None = None
 
@@ -1098,7 +1294,25 @@ class Main(star.Star):
 
                 break
 
-        await self._send_stream_updates(event, download_stream)
+        try:
+            if clash_switched:
+                await event.send(
+                    event.plain_result(f"🔀 Clash 已切换至：{clash_selected_node}")
+                )
+            await self._send_stream_updates(event, download_stream)
+        finally:
+            if clash_switched:
+                restore_error = await self._switch_clash_node(clash_original_node)
+                if restore_error:
+                    await event.send(
+                        event.plain_result(
+                            f"⚠️ 下载结束，但未能恢复 Clash 节点：{restore_error}"
+                        )
+                    )
+                else:
+                    await event.send(
+                        event.plain_result(f"↩️ Clash 已恢复至：{clash_original_node}")
+                    )
 
         if downloaded_files:
             await self._process_downloaded_files(

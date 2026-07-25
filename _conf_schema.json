@@ -44,6 +44,27 @@
         "default": "",
         "description": "代理地址",
         "hint": "Format: http://host:port or socks5://host:port"
+      },
+      "clash_controller_url": {
+        "type": "string",
+        "default": "",
+        "description": "Clash 控制器地址",
+        "hint": "例如：http://127.0.0.1:9090；需开放 Clash REST API"
+      },
+      "clash_proxy_group": {
+        "type": "string",
+        "default": "",
+        "description": "Clash 策略组名称",
+        "hint": "下载前会切换此策略组，结束后恢复原节点"
+      },
+      "clash_nodes": {
+        "type": "list",
+        "default": [],
+        "description": "Clash 可选节点列表",
+        "hint": "仅显示和允许切换此列表中的节点，不会读取策略组的全部节点",
+        "items": {
+          "type": "string"
+        }
       }
     }
   },
