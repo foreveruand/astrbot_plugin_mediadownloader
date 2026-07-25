@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.9] - 2026-07-25
+
+### Fixed
+- Routed Telegram downloader button callbacks through the active interactive session, preventing callback result decoration errors and post-download timeout messages.
+- Started `yt-dlp` downloads without a blocking title preflight so Bilibili progress and failures are reported promptly.
+
 ## [1.2.8] - 2026-07-11
 
 ### Fixed

@@ -74,46 +74,6 @@ async def download_file(url: str, save_path: Path) -> tuple[bool, float]:
     return False, 0
 
 
-async def get_video_title(
-    link: str,
-    cookie_file: str = "",
-    proxy_url: str = "",
-) -> tuple[str, str]:
-    """Get the title of a video from its URL.
-
-    Args:
-        link: Video URL
-        cookie_file: Path to cookies file
-        proxy_url: Proxy URL
-
-    Returns:
-        Tuple of (status, title_or_error)
-    """
-    cmd = [*build_yt_dlp_base_command(), "--get-title"]
-
-    if cookie_file:
-        cmd.extend(["--cookies", cookie_file])
-
-    if proxy_url:
-        cmd.extend(["--proxy", proxy_url])
-
-    cmd.append(link)
-
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-
-    stdout, stderr = await process.communicate()
-
-    if process.returncode == 0:
-        title = stdout.decode("utf-8", errors="replace").strip()
-        return "success", title
-    else:
-        error_message = stderr.decode().strip()
-        logger.error(f"Failed to get video title with error: {error_message}")
-        return "failed", error_message
-
-
 def format_ytdlp_progress(line: str) -> str | None:
     """Parse yt-dlp progress output and format it.
 
@@ -214,47 +174,56 @@ async def download_with_yt_dlp(
 
     command.append(link)
 
-    _, title = await get_video_title(link, cookie_file, proxy_url)
     last_yield_time = 0.0
 
-    process = await asyncio.create_subprocess_exec(
-        *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-
-    error_msg = None
-
-    while True:
-        stdout_task = asyncio.create_task(process.stdout.readline())
-        stderr_task = asyncio.create_task(process.stderr.readline())
-
-        done, pending = await asyncio.wait(
-            {stdout_task, stderr_task}, return_when=asyncio.FIRST_COMPLETED
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
+    except OSError as exc:
+        yield ("failed", f"Unable to start yt-dlp: {exc}")
+        return
+
+    error_msg = ""
+    stdout_closed = False
+    stderr_closed = False
+
+    while not (stdout_closed and stderr_closed):
+        tasks: dict[asyncio.Task[bytes], str] = {}
+        if not stdout_closed:
+            tasks[asyncio.create_task(process.stdout.readline())] = "stdout"
+        if not stderr_closed:
+            tasks[asyncio.create_task(process.stderr.readline())] = "stderr"
+
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
         failed = False
-        success = False
 
         for task in done:
+            stream = tasks[task]
             output = await task
             if not output:
+                if stream == "stdout":
+                    stdout_closed = True
+                else:
+                    stderr_closed = True
                 continue
 
             now = time.monotonic()
 
-            if task is stdout_task:
+            if stream == "stdout":
                 decoded_output = output.decode("utf-8", errors="replace").strip()
                 formatted = format_ytdlp_progress(decoded_output)
                 logger.debug(f"yt-dlp: {decoded_output}\n{formatted}")
 
                 if os.path.exists(decoded_output):
                     yield ("save_path", decoded_output)
-                    success = True
                 elif formatted and (now - last_yield_time >= interval):
                     last_yield_time = now
                     yield ("progress", formatted)
 
-            elif task is stderr_task:
-                error_msg = output.decode().strip()
+            else:
+                error_msg = output.decode("utf-8", errors="replace").strip()
                 if "ERROR" in error_msg:
                     failed = True
                     yield (
@@ -265,18 +234,26 @@ async def download_with_yt_dlp(
                     )
                     break
 
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
         if failed:
             break
 
-        if process.returncode is not None:
-            if process.returncode == 0 and not success:
-                yield ("success", title)
-                break
-
-        for task in pending:
-            task.cancel()
-
+    if failed and process.returncode is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
     await process.wait()
+    if process.returncode == 0:
+        yield ("success", "")
+    elif not failed:
+        yield (
+            "failed",
+            error_msg or f"yt-dlp exited with code {process.returncode}",
+        )
 
 
 def determine_filename(text_content: str, file_urls: list[str]) -> str:

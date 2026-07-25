@@ -19,7 +19,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from astrbot.api import AstrBotConfig, star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.message_components import File, Record, Video
-from astrbot.api.util import SessionController, session_waiter
+from astrbot.api.util import SessionController, SessionWaiter, session_waiter
 from astrbot.core.platform.sources.telegram.tg_event import TelegramCallbackQueryEvent
 from astrbot.core.utils.astrbot_path import (
     get_astrbot_data_path,
@@ -925,6 +925,10 @@ class Main(star.Star):
         if not event.data.startswith("vd:"):
             return
 
+        # Callback events do not carry a message_id for result decoration. Route
+        # them through the original command session, which already edits the menu.
+        event.stop_event()
+
         parts = event.data.split(":")
         if len(parts) < 4:
             return
@@ -949,59 +953,59 @@ class Main(star.Star):
         folders = self._get_download_folders()
 
         if action_type == "folder":
-            idx = int(action_value)
-            if 0 <= idx < len(folders):
-                state["selected_folder_idx"] = idx
-                result = self._send_selection_keyboard(event, session_id, idx)
-                event.set_result(result)
-                await event.answer_callback_query(text=f"已选择: {folders[idx]}")
-            else:
+            try:
+                idx = int(action_value)
+            except ValueError:
                 await event.answer_callback_query(text="无效的目录选择")
+                return
+            if not 0 <= idx < len(folders):
+                await event.answer_callback_query(text="无效的目录选择")
+                return
+            event.message_str = str(idx + 1)
+            await event.answer_callback_query(text=f"已选择: {folders[idx]}")
 
         elif action_type == "toggle":
+            toggle_text = {
+                "archive": "存档",
+                "proxy": "代理",
+                "separate": "独立文件夹",
+            }.get(action_value)
+            if toggle_text is None:
+                await event.answer_callback_query(text="无效的选项")
+                return
             if action_value == "archive":
-                state["enable_archive"] = not state.get("enable_archive", True)
+                enabled = not state.get("enable_archive", True)
                 await event.answer_callback_query(
-                    text=f"存档: {'开' if state['enable_archive'] else '关'}"
+                    text=f"存档: {'开' if enabled else '关'}"
                 )
             elif action_value == "proxy":
-                state["use_proxy"] = not state.get("use_proxy", False)
+                enabled = not state.get("use_proxy", False)
                 await event.answer_callback_query(
-                    text=f"代理: {'开' if state['use_proxy'] else '关'}"
+                    text=f"代理: {'开' if enabled else '关'}"
                 )
-            elif action_value == "separate":
-                state["video_separate_folder"] = not state.get(
-                    "video_separate_folder", False
-                )
+            else:
+                enabled = not state.get("video_separate_folder", False)
                 await event.answer_callback_query(
-                    text=f"独立文件夹: {'开' if state['video_separate_folder'] else '关'}"
+                    text=f"独立文件夹: {'开' if enabled else '关'}"
                 )
-            # Refresh keyboard
-            result = self._send_selection_keyboard(
-                event, session_id, state.get("selected_folder_idx", 0)
-            )
-            event.set_result(result)
+            event.message_str = toggle_text
 
         elif action_type == "action":
-            if action_value == "cancel":
-                SESSION_STATE.pop(session_id, None)
-                await event.answer_callback_query(text="已取消操作")
-                result = MessageEventResult()
-                result.message("❌ 已取消操作")
-                event.set_result(result)
-            else:
-                await event.answer_callback_query(text="任务已开始")
-                state["keyboard_pending"] = False
-                audio_only = action_value == "audio"
-                if state.get("mode") == "file":
-                    await self._handle_file_download(event, state)
-                else:
-                    url = state.get("url", "")
-                    if not url:
-                        await event.answer_callback_query(text="未找到下载链接")
-                        return
-                    await self._handle_download(event, url, state, audio_only)
-                SESSION_STATE.pop(session_id, None)
+            action_text = {"video": "视频", "audio": "音频", "cancel": "取消"}.get(
+                action_value
+            )
+            if action_text is None:
+                await event.answer_callback_query(text="无效操作")
+                return
+            event.message_str = action_text
+            await event.answer_callback_query(
+                text="已取消操作" if action_value == "cancel" else "任务已开始"
+            )
+        else:
+            await event.answer_callback_query(text="无效操作")
+            return
+
+        await SessionWaiter.trigger(session_id, event)
 
     async def _handle_download(
         self,
@@ -1080,7 +1084,7 @@ class Main(star.Star):
                         yield f"❌ 下载失败：{data}，重试 {attempt + 1}/{MAX_RETRIES}"
                         break
                     elif state_type == "success" and not downloaded_files:
-                        yield f"✅ 下载完成：{data}"
+                        yield "✅ 下载完成" if not data else f"✅ 下载完成：{data}"
                         break
 
                 if failed:
