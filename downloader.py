@@ -11,7 +11,7 @@ import os
 import re
 import shutil
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -22,6 +22,9 @@ logger = logging.getLogger("astrbot")
 KEMONO_HOSTS = {"kemono.su", "kemono.cr", "kemono.party"}
 YT_DLP_JS_RUNTIMES = "node"
 YT_DLP_REMOTE_COMPONENTS = "ejs:github"
+READLINE_TIMEOUT = 60.0
+TOTAL_TIMEOUT = 1200.0
+MAX_IDENTICAL_OUTPUT = 5
 
 
 def build_yt_dlp_base_command() -> list[str]:
@@ -122,6 +125,9 @@ async def download_with_yt_dlp(
     enable_archive: bool = True,
     archive_path: str = "data/archive.txt",
     interval: float = 2.0,
+    on_stop: Callable[[], bool] | None = None,
+    readline_timeout: float = READLINE_TIMEOUT,
+    total_timeout: float = TOTAL_TIMEOUT,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Download video/audio using yt-dlp.
 
@@ -134,6 +140,9 @@ async def download_with_yt_dlp(
         enable_archive: Whether to enable download archive
         archive_path: Path to archive file
         interval: Minimum interval between progress updates
+        on_stop: Optional callback returning True when the caller requested cancellation; the subprocess is terminated and a failure is yielded.
+        readline_timeout: Maximum idle seconds between output lines before the subprocess is terminated.
+        total_timeout: Maximum total wall-clock seconds before the subprocess is terminated.
 
     Yields:
         Tuple of (status, data) where status can be:
@@ -180,7 +189,10 @@ async def download_with_yt_dlp(
 
     try:
         process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *command,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
     except OSError as exc:
         yield ("failed", f"Unable to start yt-dlp: {exc}")
@@ -189,17 +201,45 @@ async def download_with_yt_dlp(
     error_msg = ""
     stdout_closed = False
     stderr_closed = False
+    failed = False
+    start_time = time.monotonic()
 
     while not (stdout_closed and stderr_closed):
+        if on_stop is not None and on_stop():
+            await _terminate_process(process)
+            yield ("failed", "下载已取消")
+            return
+        elapsed = time.monotonic() - start_time
+        if elapsed >= total_timeout:
+            await _terminate_process(process)
+            yield ("failed", f"下载总时长超过 {int(total_timeout)}s，已终止")
+            return
+
         tasks: dict[asyncio.Task[bytes], str] = {}
         if not stdout_closed:
             tasks[asyncio.create_task(process.stdout.readline())] = "stdout"
         if not stderr_closed:
             tasks[asyncio.create_task(process.stderr.readline())] = "stderr"
 
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            done, pending = await asyncio.wait(
+                tasks,
+                timeout=readline_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.TimeoutError:
+            done, pending = set(), set(tasks)
 
-        failed = False
+        if not done:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await _terminate_process(process)
+            yield (
+                "failed",
+                f"yt-dlp 超过 {int(readline_timeout)}s 无输出，已终止",
+            )
+            return
 
         for task in done:
             stream = tasks[task]
@@ -253,7 +293,10 @@ async def download_with_yt_dlp(
             process.terminate()
         except ProcessLookupError:
             pass
-    await process.wait()
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5.0)
+    except TimeoutError:
+        await _terminate_process(process)
     if process.returncode == 0:
         yield ("success", "")
     elif not failed:
@@ -362,16 +405,51 @@ def extract_session_key_from_cookie_file(cookie_file: str) -> str:
     return ""
 
 
+async def _terminate_process(process: asyncio.subprocess.Process) -> None:
+    """Terminate a subprocess, escalating to kill if it refuses to exit.
+
+    Args:
+        process: The subprocess to terminate.
+    """
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5.0)
+    except TimeoutError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        await asyncio.gather(process.wait(), return_exceptions=True)
+
+
 async def _stream_process_output(
     command: list[str],
     *,
     cwd: Path | None = None,
+    on_stop: Callable[[], bool] | None = None,
+    readline_timeout: float = READLINE_TIMEOUT,
+    total_timeout: float = TOTAL_TIMEOUT,
 ) -> AsyncGenerator[tuple[str, str], None]:
-    """Run a subprocess and stream stdout/stderr lines."""
+    """Run a subprocess and stream stdout/stderr lines.
+
+    Args:
+        command: Command and arguments to execute.
+        cwd: Optional working directory for the subprocess.
+        on_stop: Optional callback returning True when the caller requested cancellation; the subprocess is terminated and a failure is yielded.
+        readline_timeout: Maximum idle seconds between output lines before the subprocess is terminated.
+        total_timeout: Maximum total wall-clock seconds before the subprocess is terminated.
+
+    Yields:
+        Tuples of (status, data) where status is "output", "success", or "failed".
+    """
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=str(cwd) if cwd else None,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -380,15 +458,63 @@ async def _stream_process_output(
         return
 
     assert process.stdout is not None
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
-        decoded = line.decode("utf-8", errors="replace").strip()
-        if decoded:
+    last_output = ""
+    identical_count = 0
+    start_time = time.monotonic()
+    try:
+        while True:
+            if on_stop is not None and on_stop():
+                await _terminate_process(process)
+                yield ("failed", "下载已取消")
+                return
+            elapsed = time.monotonic() - start_time
+            if elapsed >= total_timeout:
+                await _terminate_process(process)
+                yield (
+                    "failed",
+                    f"下载总时长超过 {int(total_timeout)}s，已终止",
+                )
+                return
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(),
+                    timeout=readline_timeout,
+                )
+            except TimeoutError:
+                await _terminate_process(process)
+                yield (
+                    "failed",
+                    f"{command[0]} 超过 {int(readline_timeout)}s 无输出，已终止",
+                )
+                return
+            if not line:
+                break
+            decoded = line.decode("utf-8", errors="replace").strip()
+            if not decoded:
+                continue
+            # gallery-dl / ktoolbox 会在鉴权失败等情况时反复打印同一行错误并
+            # 持续重试，导致 readline 不会触发空闲超时；检测到同一行连续重复
+            # 即判定为卡在重试循环，主动终止子进程。
+            if decoded == last_output:
+                identical_count += 1
+                if identical_count >= MAX_IDENTICAL_OUTPUT:
+                    await _terminate_process(process)
+                    yield (
+                        "failed",
+                        f"{command[0]} 持续重复输出同一行，疑似卡在重试循环，已终止",
+                    )
+                    return
+            else:
+                last_output = decoded
+                identical_count = 0
             yield ("output", decoded)
 
-    await process.wait()
+        await asyncio.wait_for(process.wait(), timeout=5.0)
+    except (TimeoutError, asyncio.TimeoutError):
+        await _terminate_process(process)
+        yield ("failed", f"{command[0]} 等待退出超时，已终止")
+        return
+
     if process.returncode == 0:
         yield ("success", "")
     else:
@@ -403,11 +529,25 @@ async def download_with_gallery_dl(
     proxy_url: str = "",
     enable_archive: bool = True,
     archive_path: str = "data/archive-gallery.txt",
+    on_stop: Callable[[], bool] | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
-    """Download images using gallery-dl."""
+    """Download images using gallery-dl.
+
+    Args:
+        link: Image gallery URL.
+        output_dir: Directory to download into.
+        config_file: Optional gallery-dl config file path.
+        cookie_file: Optional gallery-dl cookies file path.
+        proxy_url: Optional proxy URL.
+        enable_archive: Whether to enable download archive.
+        archive_path: Path to the archive file.
+        on_stop: Optional callback returning True when the caller requested cancellation.
+    """
     command = [
         "gallery-dl",
         "--config-ignore",
+        "--abort",
+        "1",
         "-d",
         str(output_dir),
         "--no-colors",
@@ -429,7 +569,7 @@ async def download_with_gallery_dl(
 
     command.append(link)
 
-    async for state_type, data in _stream_process_output(command):
+    async for state_type, data in _stream_process_output(command, on_stop=on_stop):
         if state_type == "output":
             yield ("progress", data)
         else:
@@ -462,12 +602,22 @@ async def download_with_ktoolbox(
     link: str,
     workspace: Path,
     output_dir: Path,
+    on_stop: Callable[[], bool] | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
-    """Download images using ktoolbox."""
+    """Download images using ktoolbox.
+
+    Args:
+        link: Kemono URL.
+        workspace: Working directory for the ktoolbox subprocess.
+        output_dir: Directory to download into.
+        on_stop: Optional callback returning True when the caller requested cancellation.
+    """
     command = infer_ktoolbox_command(link)
     command.append(str(output_dir))
 
-    async for state_type, data in _stream_process_output(command, cwd=workspace):
+    async for state_type, data in _stream_process_output(
+        command, cwd=workspace, on_stop=on_stop
+    ):
         if state_type == "output":
             yield ("progress", data)
         else:

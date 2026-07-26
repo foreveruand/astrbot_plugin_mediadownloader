@@ -1269,6 +1269,7 @@ class Main(star.Star):
                     audio_only,
                     enable_archive,
                     archive_path,
+                    on_stop=event.is_stopped,
                 ):
                     if state_type == "progress":
                         yield f"📥 下载中：{data}"
@@ -1507,7 +1508,9 @@ class Main(star.Star):
             prepare_ktoolbox_env(workspace, config_file, session_key)
 
             def stream_factory() -> AsyncGenerator[str, None]:
-                return self._stream_ktoolbox_download(url, workspace, download_root)
+                return self._stream_ktoolbox_download(
+                    url, workspace, download_root, on_stop=event.is_stopped
+                )
 
         else:
             tool_name = "gallery-dl"
@@ -1516,7 +1519,11 @@ class Main(star.Star):
 
             def stream_factory() -> AsyncGenerator[str, None]:
                 return self._stream_gallery_dl_download(
-                    url, download_root, config_file, cookie_file
+                    url,
+                    download_root,
+                    config_file,
+                    cookie_file,
+                    on_stop=event.is_stopped,
                 )
 
         await event.send(event.plain_result(f"🖼️ 使用 {tool_name} 开始下载..."))
@@ -1544,6 +1551,7 @@ class Main(star.Star):
         download_root: Path,
         config_file: str,
         cookie_file: str,
+        on_stop: Callable[[], bool] | None = None,
     ) -> AsyncGenerator[str, None]:
         archive_path = str(Path(get_astrbot_data_path(), "archive-gallery.txt"))
         yield "⏳ gallery-dl 开始下载..."
@@ -1554,6 +1562,7 @@ class Main(star.Star):
             cookie_file=cookie_file,
             enable_archive=self._get_common_config().get("enable_archive", True),
             archive_path=archive_path,
+            on_stop=on_stop,
         ):
             if state_type == "progress":
                 yield f"📥 {data}"
@@ -1569,10 +1578,11 @@ class Main(star.Star):
         url: str,
         workspace: Path,
         download_root: Path,
+        on_stop: Callable[[], bool] | None = None,
     ) -> AsyncGenerator[str, None]:
         yield "⏳ ktoolbox 开始下载..."
         async for state_type, data in download_with_ktoolbox(
-            url, workspace, download_root
+            url, workspace, download_root, on_stop=on_stop
         ):
             if state_type == "progress":
                 yield f"📥 {data}"

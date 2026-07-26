@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-07-26
+
+### Fixed
+- Stopped the downloader hanging the bot when gallery-dl, ktoolbox, or yt-dlp produced no output for an extended period: subprocess reads now time out (60s idle / 1200s total) and the process is terminated.
+- Isolated downloader subprocess stdin to `/dev/null` so misbehaving tools cannot block on the parent's stdin.
+- Made `/stop` effective against active `/video`, `/audio`, and `/image` downloads by periodically checking the event stop flag inside the download loops and terminating the subprocess when cancellation is requested.
+- Passed `--abort 1` to gallery-dl and detected repeated identical output lines so gallery-dl no longer keeps the bot stuck in an internal auth/retry loop when login info is missing; the subprocess is terminated and a failure is reported promptly.
+
 ## [1.3.0] - 2026-07-25
 
 ### Added
