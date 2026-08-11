@@ -6,7 +6,6 @@ with optional rclone upload support.
 """
 
 import asyncio
-import logging
 import os
 import re
 import uuid
@@ -18,7 +17,7 @@ from urllib.parse import quote
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from astrbot.api import AstrBotConfig, star
+from astrbot.api import AstrBotConfig, logger, star
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.message_components import File, Record, Video
 from astrbot.api.util import SessionController, SessionWaiter, session_waiter
@@ -40,8 +39,6 @@ from .downloader import (
     prepare_ktoolbox_env,
 )
 from .rclone import rclone_move_directory, rclone_transfer
-
-logger = logging.getLogger("astrbot")
 
 SESSION_STATE: dict[str, dict[str, Any]] = {}
 SESSION_TIMEOUT = 300
@@ -1223,10 +1220,18 @@ class Main(star.Star):
 
         # Get cookie file path
         cookie_file = self._get_plugin_upload_path("cookie_file")
+        cookie_browser = str(self._get_video_config().get("cookie_browser", "")).strip()
         proxy_url = (
             self._get_video_config().get("video_proxy_url", "") if use_proxy else ""
         )
         archive_path = str(Path(get_astrbot_data_path(), "archive.txt"))
+
+        if not cookie_file and not cookie_browser:
+            logger.info("No yt-dlp cookies configured for url=%s", url)
+        elif cookie_browser:
+            logger.info("Using browser cookies for yt-dlp: %s", cookie_browser)
+        else:
+            logger.info("Using uploaded yt-dlp cookie file: %s", cookie_file)
 
         clash_original_node = ""
         clash_selected_node = state.get("clash_selected_node", "")
@@ -1234,6 +1239,9 @@ class Main(star.Star):
         if self._has_clash_config():
             _, _, clash_nodes = self._get_clash_config()
             if clash_selected_node not in clash_nodes:
+                logger.warning(
+                    "Download blocked before yt-dlp start: no valid Clash node selected"
+                )
                 await event.send(
                     event.plain_result("❌ 请先在下载菜单中选择一个 Clash 节点")
                 )
@@ -1269,7 +1277,7 @@ class Main(star.Star):
                     audio_only,
                     enable_archive,
                     archive_path,
-                    on_stop=event.is_stopped,
+                    cookie_browser=cookie_browser,
                 ):
                     if state_type == "progress":
                         yield f"📥 下载中：{data}"

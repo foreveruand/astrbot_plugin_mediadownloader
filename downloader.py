@@ -6,10 +6,10 @@ This module provides functionality to download videos and audio from various pla
 
 import asyncio
 import json
-import logging
 import os
 import re
 import shutil
+import sys
 import time
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -17,24 +17,43 @@ from urllib.parse import urlparse
 
 import httpx
 
-logger = logging.getLogger("astrbot")
+from astrbot.api import logger
 
 KEMONO_HOSTS = {"kemono.su", "kemono.cr", "kemono.party"}
 YT_DLP_JS_RUNTIMES = "node"
 YT_DLP_REMOTE_COMPONENTS = "ejs:github"
-READLINE_TIMEOUT = 60.0
+READLINE_TIMEOUT = 180.0
 TOTAL_TIMEOUT = 1200.0
 MAX_IDENTICAL_OUTPUT = 5
+YT_DLP_SOCKET_TIMEOUT = "60"
+YT_DLP_RETRIES = "10"
+YT_DLP_EXTRACTOR_RETRIES = "5"
+YT_DLP_FRAGMENT_RETRIES = "20"
 
 
 def build_yt_dlp_base_command() -> list[str]:
     """Build shared yt-dlp arguments required by this plugin."""
+    environment_executable = Path(sys.executable).with_name("yt-dlp")
+    executable = (
+        str(environment_executable)
+        if environment_executable.is_file()
+        else shutil.which("yt-dlp") or "yt-dlp"
+    )
     return [
-        "yt-dlp",
+        executable,
         "--js-runtimes",
         YT_DLP_JS_RUNTIMES,
         "--remote-components",
         YT_DLP_REMOTE_COMPONENTS,
+        "--socket-timeout",
+        YT_DLP_SOCKET_TIMEOUT,
+        "--retries",
+        YT_DLP_RETRIES,
+        "--extractor-retries",
+        YT_DLP_EXTRACTOR_RETRIES,
+        "--fragment-retries",
+        YT_DLP_FRAGMENT_RETRIES,
+        "--continue",
     ]
 
 
@@ -128,6 +147,7 @@ async def download_with_yt_dlp(
     on_stop: Callable[[], bool] | None = None,
     readline_timeout: float = READLINE_TIMEOUT,
     total_timeout: float = TOTAL_TIMEOUT,
+    cookie_browser: str = "",
 ) -> AsyncGenerator[tuple[str, str], None]:
     """Download video/audio using yt-dlp.
 
@@ -143,6 +163,8 @@ async def download_with_yt_dlp(
         on_stop: Optional callback returning True when the caller requested cancellation; the subprocess is terminated and a failure is yielded.
         readline_timeout: Maximum idle seconds between output lines before the subprocess is terminated.
         total_timeout: Maximum total wall-clock seconds before the subprocess is terminated.
+        cookie_browser: yt-dlp browser cookie source, such as ``chrome`` or
+            ``firefox:default-release``.
 
     Yields:
         Tuple of (status, data) where status can be:
@@ -167,11 +189,21 @@ async def download_with_yt_dlp(
         "--add-metadata",
     ]
 
-    if cookie_file:
+    cookie_browser = cookie_browser.strip()
+    if cookie_browser:
+        command.extend(["--cookies-from-browser", cookie_browser])
+        cookie_source = f"browser:{cookie_browser}"
+    elif cookie_file:
         command.extend(["--cookies", cookie_file])
+        cookie_source = f"file:{cookie_file}"
+    else:
+        cookie_source = "none"
 
-    if proxy_url:
-        command.extend(["--proxy", proxy_url])
+    if cookie_file and not Path(cookie_file).is_file() and not cookie_browser:
+        logger.warning("yt-dlp cookie file does not exist: %s", cookie_file)
+
+    # Make the plugin setting override inherited HTTP(S)_PROXY variables.
+    command.extend(["--proxy", proxy_url])
 
     if audio:
         command.append("-x")
@@ -183,7 +215,36 @@ async def download_with_yt_dlp(
     if "pornhub.com" in link:
         command.extend(["--referer", "https://www.pornhub.com/"])
 
+    if logger.isEnabledFor(10):
+        command.append("--verbose")
+
     command.append(link)
+
+    proxy_for_log = proxy_url
+    if proxy_url:
+        parsed_proxy = urlparse(proxy_url)
+        if parsed_proxy.username or parsed_proxy.password:
+            host = parsed_proxy.hostname or ""
+            port = f":{parsed_proxy.port}" if parsed_proxy.port else ""
+            proxy_for_log = f"{parsed_proxy.scheme}://***@{host}{port}"
+    logged_command = list(command)
+    for option in ("--cookies", "--cookies-from-browser", "--proxy"):
+        if option in logged_command:
+            option_index = logged_command.index(option)
+            if option == "--cookies":
+                logged_command[option_index + 1] = "<cookie-file>"
+            elif option == "--cookies-from-browser":
+                logged_command[option_index + 1] = "<browser-cookie-source>"
+            else:
+                logged_command[option_index + 1] = proxy_for_log
+    logger.info(
+        "Starting yt-dlp: executable=%s cookie_source=%s proxy=%s url=%s",
+        command[0],
+        cookie_source,
+        proxy_for_log or "none",
+        link,
+    )
+    logger.debug("yt-dlp command: %s", logged_command)
 
     last_yield_time = 0.0
 
@@ -195,10 +256,14 @@ async def download_with_yt_dlp(
             stderr=asyncio.subprocess.PIPE,
         )
     except OSError as exc:
-        yield ("failed", f"Unable to start yt-dlp: {exc}")
+        logger.exception("Unable to start yt-dlp: executable=%s", command[0])
+        yield ("failed", f"Unable to start yt-dlp ({command[0]}): {exc}")
         return
 
-    error_msg = ""
+    logger.info("yt-dlp started: pid=%s", process.pid)
+
+    stderr_lines: list[str] = []
+    error_lines: list[str] = []
     stdout_closed = False
     stderr_closed = False
     failed = False
@@ -206,11 +271,17 @@ async def download_with_yt_dlp(
 
     while not (stdout_closed and stderr_closed):
         if on_stop is not None and on_stop():
+            logger.info("Stopping yt-dlp after cancellation: pid=%s", process.pid)
             await _terminate_process(process)
             yield ("failed", "下载已取消")
             return
         elapsed = time.monotonic() - start_time
         if elapsed >= total_timeout:
+            logger.warning(
+                "Stopping yt-dlp after total timeout: pid=%s timeout=%ss",
+                process.pid,
+                int(total_timeout),
+            )
             await _terminate_process(process)
             yield ("failed", f"下载总时长超过 {int(total_timeout)}s，已终止")
             return
@@ -234,6 +305,11 @@ async def download_with_yt_dlp(
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            logger.warning(
+                "Stopping yt-dlp after idle timeout: pid=%s timeout=%ss",
+                process.pid,
+                int(readline_timeout),
+            )
             await _terminate_process(process)
             yield (
                 "failed",
@@ -254,8 +330,15 @@ async def download_with_yt_dlp(
             now = time.monotonic()
 
             decoded_output = output.decode("utf-8", errors="replace").strip()
+            safe_output = re.sub(
+                r"https?://[^\s\"']+\?[^\s\"']+",
+                lambda match: match.group(0).split("?", 1)[0] + "?<redacted>",
+                decoded_output,
+            )
+            if proxy_url:
+                safe_output = safe_output.replace(proxy_url, proxy_for_log)
             formatted = format_ytdlp_progress(decoded_output)
-            logger.debug(f"yt-dlp ({stream}): {decoded_output}\n{formatted}")
+            logger.debug("yt-dlp (%s): %s", stream, safe_output)
 
             if stream == "stdout":
                 if os.path.exists(decoded_output):
@@ -265,28 +348,25 @@ async def download_with_yt_dlp(
                     yield ("progress", formatted)
 
             else:
+                if decoded_output:
+                    stderr_lines.append(safe_output)
+                    if len(stderr_lines) > 40:
+                        del stderr_lines[:-40]
+                    if decoded_output.startswith("ERROR:") or "ERROR" in decoded_output:
+                        error_lines.append(safe_output)
+                        if len(error_lines) > 10:
+                            del error_lines[:-10]
                 if formatted:
                     if now - last_yield_time >= interval:
                         last_yield_time = now
                         yield ("progress", formatted)
                     continue
-                error_msg = decoded_output
-                if "ERROR" in error_msg:
+                if "ERROR" in decoded_output:
                     failed = True
-                    yield (
-                        "failed",
-                        f"Download failed: {error_msg}"
-                        if error_msg
-                        else "Download failed",
-                    )
-                    break
 
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-
-        if failed:
-            break
 
     if failed and process.returncode is None:
         try:
@@ -297,9 +377,22 @@ async def download_with_yt_dlp(
         await asyncio.wait_for(process.wait(), timeout=5.0)
     except TimeoutError:
         await _terminate_process(process)
+    logger.info(
+        "yt-dlp finished: pid=%s returncode=%s failed=%s",
+        process.pid,
+        process.returncode,
+        failed,
+    )
     if process.returncode == 0:
         yield ("success", "")
     elif not failed:
+        error_msg = "\n".join(error_lines[-5:] or stderr_lines[-5:])
+        yield (
+            "failed",
+            error_msg or f"yt-dlp exited with code {process.returncode}",
+        )
+    else:
+        error_msg = "\n".join(error_lines[-5:] or stderr_lines[-5:])
         yield (
             "failed",
             error_msg or f"yt-dlp exited with code {process.returncode}",

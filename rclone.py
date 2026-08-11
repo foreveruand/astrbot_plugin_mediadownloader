@@ -5,12 +5,11 @@ This module provides functionality to transfer downloaded files to remote storag
 """
 
 import asyncio
-import logging
 import re
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-logger = logging.getLogger("astrbot")
+from astrbot.api import logger
 
 
 def format_rclone_progress(line: str) -> str | None:

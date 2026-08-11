@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-08-11
+
+### Added
+- Added `video_config.cookie_browser` to load yt-dlp cookies from a browser profile on the AstrBot host.
+- Added support and documentation for absolute browser profile paths, including Playwright Chromium profiles.
+
+### Changed
+- Routed yt-dlp and rclone output through the plugin logger and added process, proxy, cookie-source, exit-code, and extractor diagnostics.
+- Added network and fragment retries, socket timeouts, and resumable `.part` downloads for transient proxy failures.
+
+### Fixed
+- Collected yt-dlp errors after the process exits instead of stopping at the first `ERROR` line.
+- Prevented Telegram menu events from immediately cancelling video downloads after they are consumed.
+- Redacted temporary media URL query parameters and proxy credentials from diagnostic logs.
+
 ## [1.3.1] - 2026-07-26
 
 ### Fixed

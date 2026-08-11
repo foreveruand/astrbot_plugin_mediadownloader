@@ -29,6 +29,12 @@
         "description": "yt-dlp cookies 文件",
         "hint": "上传 cookies.txt 文件用于认证"
       },
+      "cookie_browser": {
+        "type": "string",
+        "default": "",
+        "description": "从本机浏览器读取 yt-dlp cookies",
+        "hint": "留空使用上传文件；可填写 chrome、chromium、edge、firefox，或 yt-dlp 格式如 chromium:Profile 1、firefox:default-release。Playwright Chromium 可填写 chromium:/root/.config/google-chrome-for-testing/Profile 1"
+      },
       "video_seperate_folder": {
         "type": "bool",
         "default": false,

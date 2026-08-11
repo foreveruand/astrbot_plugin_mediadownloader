@@ -13,6 +13,7 @@ A video/audio/image downloader plugin for AstrBot using `yt-dlp[node]` and galle
 - Optional rclone upload support
 - Proxy support
 - Uploaded cookies are applied to both metadata lookup and the actual yt-dlp download
+- Read yt-dlp cookies directly from a local browser profile
 - The plugin enables `yt-dlp` EJS remote components via `--remote-components ejs:github` for YouTube challenge solving
 - Download archive to avoid re-downloading
 - Telegram file upload support (download files directly)
@@ -43,7 +44,7 @@ The settings are grouped into second-level sections:
 - `common_config`
   Enables shared behaviors such as download archive.
 - `video_config`
-  Contains `yt-dlp` related options like download folders, cookies, proxy, separate-folder layout, and optional Clash node switching. To enable Clash selection, configure all of `clash_controller_url`, `clash_proxy_group`, and `clash_nodes`. Only the configured node list is shown; the plugin reads the group's current node when the menu opens, switches before yt-dlp starts, and restores that node when the download ends.
+  Contains download folders, cookies, proxy, separate-folder layout, and optional Clash node switching. Configure `clash_controller_url`, `clash_proxy_group`, and `clash_nodes` together to enable Clash selection.
 - `image_config`
   Contains local image download path plus `gallery-dl` / external `ktoolbox` config and cookies files.
 - `rclone_config`
@@ -101,6 +102,21 @@ After sending a URL, you can:
 8. Reply "开始" to download using the default mode
 
 On Telegram, inline button clicks and text/file replies use the same interactive session, refresh the existing menu message when possible, and stop the session when a download begins. Configured Clash nodes appear in one button row, with the current group node selected by default when it is in the configured list. User reply messages are deleted when Telegram permits it and are consumed by the downloader session, so they do not trigger an LLM response.
+
+### Browser Cookies and Diagnostics
+
+Set `video_config.cookie_browser` to read cookies from a browser on the AstrBot host. Leave it empty to use the uploaded Netscape-format `cookie_file`; when both are configured, the browser source is used. The browser profile must be readable by the user running AstrBot.
+
+Examples:
+
+```text
+chromium
+chromium:Profile 1
+chromium:/root/.config/google-chrome-for-testing/Profile 1
+firefox:default-release
+```
+
+The plugin records the yt-dlp executable, cookie source, proxy, process ID, exit code, and extractor errors in the plugin log. Set the plugin log level to `DEBUG` in the AstrBot dashboard for yt-dlp verbose diagnostics. Cookie values, proxy credentials, and temporary media URL parameters are redacted.
 
 ## Supported Platforms
 
