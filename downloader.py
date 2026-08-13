@@ -550,6 +550,9 @@ async def _stream_process_output(
         yield ("failed", f"Command not found: {command[0]}")
         return
 
+    logger.info(
+        "Started downloader subprocess: command=%s pid=%s", command[0], process.pid
+    )
     assert process.stdout is not None
     last_output = ""
     identical_count = 0
@@ -585,6 +588,7 @@ async def _stream_process_output(
             decoded = line.decode("utf-8", errors="replace").strip()
             if not decoded:
                 continue
+            logger.debug("%s output: %s", command[0], decoded)
             # gallery-dl / ktoolbox 会在鉴权失败等情况时反复打印同一行错误并
             # 持续重试，导致 readline 不会触发空闲超时；检测到同一行连续重复
             # 即判定为卡在重试循环，主动终止子进程。
@@ -609,8 +613,19 @@ async def _stream_process_output(
         return
 
     if process.returncode == 0:
+        logger.info(
+            "Downloader subprocess finished: command=%s pid=%s returncode=0",
+            command[0],
+            process.pid,
+        )
         yield ("success", "")
     else:
+        logger.warning(
+            "Downloader subprocess failed: command=%s pid=%s returncode=%s",
+            command[0],
+            process.pid,
+            process.returncode,
+        )
         yield ("failed", f"Command exited with code {process.returncode}")
 
 

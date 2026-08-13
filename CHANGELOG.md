@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-08-12
+
+### Fixed
+- Prevented image download directory scans from blocking AstrBot's event loop.
+- Prevented the framework's early event termination state from cancelling image subprocesses immediately after `/image` starts.
+- Reported gallery-dl success only after verifying that new files were created, with clearer diagnostics for missing cookies, authentication failures, network errors, and archive skips.
+
 ## [1.4.0] - 2026-08-11
 
 ### Added

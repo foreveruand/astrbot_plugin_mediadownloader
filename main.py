@@ -1497,11 +1497,19 @@ class Main(star.Star):
         )
         download_root = temp_root if use_rclone else Path(target_path)
         download_root.mkdir(parents=True, exist_ok=True)
-        existing_files = {
-            path.relative_to(download_root)
-            for path in download_root.rglob("*")
-            if path.is_file()
-        }
+        existing_files = await asyncio.to_thread(
+            lambda: {
+                path.relative_to(download_root)
+                for path in download_root.rglob("*")
+                if path.is_file()
+            }
+        )
+        event_was_stopped = event.is_stopped()
+
+        def is_download_cancelled() -> bool:
+            # A command event may already be stopped by the framework before the
+            # long-running handler starts. Only a later transition is a cancel.
+            return not event_was_stopped and event.is_stopped()
 
         if is_ktoolbox_url(url):
             tool_name = "ktoolbox"
@@ -1517,7 +1525,7 @@ class Main(star.Star):
 
             def stream_factory() -> AsyncGenerator[str, None]:
                 return self._stream_ktoolbox_download(
-                    url, workspace, download_root, on_stop=event.is_stopped
+                    url, workspace, download_root, on_stop=is_download_cancelled
                 )
 
         else:
@@ -1531,19 +1539,45 @@ class Main(star.Star):
                     download_root,
                     config_file,
                     cookie_file,
-                    on_stop=event.is_stopped,
+                    on_stop=is_download_cancelled,
                 )
+
+            logger.info(
+                "Starting gallery-dl image download: url=%s config=%s cookies=%s archive=%s",
+                url,
+                bool(config_file),
+                bool(cookie_file),
+                self._get_common_config().get("enable_archive", True),
+            )
 
         await event.send(event.plain_result(f"🖼️ 使用 {tool_name} 开始下载..."))
         await self._send_stream_updates(event, stream_factory)
 
-        new_files = {
-            path.relative_to(download_root)
-            for path in download_root.rglob("*")
-            if path.is_file()
-        }
-        if not new_files.difference(existing_files):
-            await event.send(event.plain_result("❌ 未检测到已下载文件"))
+        new_files = await asyncio.to_thread(
+            lambda: {
+                path.relative_to(download_root)
+                for path in download_root.rglob("*")
+                if path.is_file()
+            }
+        )
+        downloaded_files = new_files.difference(existing_files)
+        if not downloaded_files:
+            logger.warning(
+                "gallery-dl exited without new files: url=%s target=%s config=%s "
+                "cookies=%s archive=%s existing_files=%d",
+                url,
+                download_root,
+                bool(config_file),
+                bool(cookie_file),
+                self._get_common_config().get("enable_archive", True),
+                len(existing_files),
+            )
+            await event.send(
+                event.plain_result(
+                    "❌ gallery-dl 未产生新文件，可能是链接需要 cookies、网络/站点鉴权失败，"
+                    "或文件已被下载存档跳过；请查看插件 DEBUG 日志。"
+                )
+            )
             return
 
         if use_rclone:
@@ -1578,7 +1612,7 @@ class Main(star.Star):
                 yield f"❌ gallery-dl 下载失败：{data}"
                 return
             elif state_type == "success":
-                yield "✅ gallery-dl 下载完成"
+                yield "✅ gallery-dl 进程已完成，正在检查新文件..."
                 return
 
     async def _stream_ktoolbox_download(

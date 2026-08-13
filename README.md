@@ -20,6 +20,7 @@ A video/audio/image downloader plugin for AstrBot using `yt-dlp[node]` and galle
 - Optional separate folder per video
 - Real-time yt-dlp progress updates with rate-limited message edits
 - Per-download Clash proxy-group node selection and automatic restoration
+- Image downloads verify that gallery-dl created new files before reporting success
 
 ## Installation
 
@@ -80,6 +81,7 @@ Behavior:
 - Other supported image/gallery URLs use `gallery-dl`
 - Local mode saves to `image_download_folder`
 - rclone mode downloads to a temp directory and uploads the whole tree to `image_rclone_folder`, preserving nested paths such as `author/platform/...`
+- A successful gallery-dl process with no new files is reported as a download failure. Check the plugin DEBUG log when the URL requires cookies, authentication fails, the network request fails, or the download archive skips an already-downloaded file.
 
 ### Telegram File Download
 
@@ -106,6 +108,7 @@ On Telegram, inline button clicks and text/file replies use the same interactive
 ### Browser Cookies and Diagnostics
 
 Set `video_config.cookie_browser` to read cookies from a browser on the AstrBot host. Leave it empty to use the uploaded Netscape-format `cookie_file`; when both are configured, the browser source is used. The browser profile must be readable by the user running AstrBot.
+For X/Twitter image posts, configure `image_config.gallery_dl_cookie_file` with an exported cookie file when guest access returns no results. A gallery-dl process can exit with code `0` without downloading anything when the post is unavailable to guests.
 
 Examples:
 
