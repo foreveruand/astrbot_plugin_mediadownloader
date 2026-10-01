@@ -12,7 +12,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -36,6 +36,7 @@ from .downloader import (
     download_with_yt_dlp,
     extract_session_key_from_cookie_file,
     is_ktoolbox_url,
+    load_gallery_dl_domains,
     prepare_ktoolbox_env,
 )
 from .rclone import rclone_move_directory, rclone_transfer
@@ -54,6 +55,7 @@ class Main(star.Star):
         self.context = context
         self.config = config
         self._initialized = False
+        self._gallery_dl_domains: set[str] = set()
 
     async def _send_stream_updates(
         self,
@@ -159,6 +161,13 @@ class Main(star.Star):
 
         archive_path = Path(get_astrbot_data_path(), "archive.txt")
         archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+        config_path = self._get_plugin_upload_path("gallery_dl_config_file")
+        self._gallery_dl_domains = load_gallery_dl_domains(config_path)
+        if self._gallery_dl_domains:
+            logger.info(
+                f"gallery-dl whitelist loaded: {sorted(self._gallery_dl_domains)}"
+            )
 
         self._initialized = True
         logger.info("Media Downloader plugin initialized successfully")
@@ -304,6 +313,17 @@ class Main(star.Star):
 
     def _is_telegram_file_url(self, url: str) -> bool:
         return "/file/bot" in url
+
+    def _is_gallery_dl_url(self, url: str) -> bool:
+        """Check whether the URL matches a domain in the gallery-dl whitelist."""
+        if not self._gallery_dl_domains:
+            return False
+        hostname = urlparse(url).hostname or ""
+        hostname = hostname.lower()
+        # Match against whitelist, stripping leading "www." if needed
+        return hostname in self._gallery_dl_domains or (
+            hostname.startswith("www.") and hostname[4:] in self._gallery_dl_domains
+        )
 
     def _collect_file_sources(self, event: AstrMessageEvent) -> tuple[list[str], str]:
         file_urls: list[str] = []
@@ -761,33 +781,44 @@ class Main(star.Star):
         await self.initialize()
 
         message = event.message_str.strip()
-        command = "audio" if default_action == "audio" else "video"
-        args_text = message.replace(command, "", 1).strip()
+        args_text = message.replace("dl", "", 1).strip()
 
         session_id = str(event.unified_msg_origin)
-        state = self._init_session_state(session_id, default_action)
 
         file_urls, filename_hint = self._collect_file_sources(event)
-        if filename_hint:
-            state["filename_hint"] = filename_hint
 
         if args_text and self._is_url(args_text):
+            # Gallery-dl / ktoolbox URLs bypass the interactive menu
+            if is_ktoolbox_url(args_text) or self._is_gallery_dl_url(args_text):
+                await self._handle_image_download(event, args_text)
+                return
             if self._is_telegram_file_url(args_text):
+                state = self._init_session_state(session_id, default_action)
+                if filename_hint:
+                    state["filename_hint"] = filename_hint
                 state.update({"mode": "file", "file_urls": [args_text]})
             else:
+                state = self._init_session_state(session_id, default_action)
+                if filename_hint:
+                    state["filename_hint"] = filename_hint
                 state.update({"mode": "yt-dlp", "url": args_text})
         elif args_text:
+            state = self._init_session_state(session_id, default_action)
             state["filename_hint"] = args_text
             if file_urls:
                 state.update({"mode": "file", "file_urls": file_urls})
             else:
                 state["stage"] = "await_file"
         elif file_urls:
+            state = self._init_session_state(session_id, default_action)
+            if filename_hint:
+                state["filename_hint"] = filename_hint
             state.update({"mode": "file", "file_urls": file_urls})
         else:
             usage = (
-                "用法：/video <链接> 或 /video <文件名>\n"
-                "支持 YouTube, Bilibili, Twitter 等平台的视频下载。\n"
+                "用法：/dl <链接> 或 /dl <文件名>\n"
+                "支持 YouTube, Bilibili, Twitter 等视频平台，\n"
+                "以及 gallery-dl 配置文件中定义的图片站点。\n"
                 "在 Telegram 中可直接发送文件或文件链接。"
             )
             yield event.plain_result(usage)
@@ -1064,16 +1095,10 @@ class Main(star.Star):
                 SESSION_STATE.pop(session_id, None)
             event.stop_event()
 
-    @filter.command("video")
-    async def video_command(self, event: AstrMessageEvent):
-        """Download video or audio from URL or Telegram file."""
+    @filter.command("dl")
+    async def dl_command(self, event: AstrMessageEvent):
+        """Download media from URL or Telegram file."""
         async for result in self._start_command(event, "video"):
-            yield result
-
-    @filter.command("audio")
-    async def audio_command(self, event: AstrMessageEvent):
-        """Download audio from URL or Telegram file."""
-        async for result in self._start_command(event, "audio"):
             yield result
 
     @filter.callback_query()
@@ -1458,21 +1483,6 @@ class Main(star.Star):
                     return
 
         await self._send_stream_updates(event, transfer_stream)
-
-    @filter.command("image")
-    async def image_command(self, event: AstrMessageEvent):
-        """Download images using gallery-dl or ktoolbox."""
-        await self.initialize()
-
-        url = event.message_str.replace("image", "", 1).strip()
-        if not url or not self._is_url(url):
-            yield event.plain_result(
-                "用法：/image <链接>\n"
-                "Kemono 链接会使用 ktoolbox，其他受支持图片站点会使用 gallery-dl。"
-            )
-            return
-
-        await self._handle_image_download(event, url)
 
     async def _handle_image_download(
         self,

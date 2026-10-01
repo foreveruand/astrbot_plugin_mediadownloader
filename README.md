@@ -53,27 +53,23 @@ The settings are grouped into second-level sections:
 
 ## Usage
 
-### Basic Download
+### Unified Download Command
 
 ```
-/video <url>
+/dl <url>
 ```
 
-Example:
-```
-/video https://www.youtube.com/watch?v=xxxxx
-```
+The plugin automatically selects the right tool based on the URL:
 
-### Audio Download
+- **Kemono URLs** → `ktoolbox` (direct download, no menu)
+- **gallery-dl sites** (from your config) → `gallery-dl` (direct download, no menu)
+- **Everything else** → `yt-dlp` with interactive folder/config selection
 
+Examples:
 ```
-/audio <url>
-```
-
-### Image Download
-
-```
-/image <url>
+/dl https://www.youtube.com/watch?v=xxxxx     → yt-dlp (video)
+/dl https://www.pixiv.net/artworks/12345      → gallery-dl (image)
+/dl https://kemono.su/fanbox/user/123/post/1  → ktoolbox
 ```
 
 Behavior:
@@ -86,12 +82,12 @@ Behavior:
 ### Telegram File Download
 
 ```
-/video <filename>
+/dl <filename>
 ```
 
 Then upload a file in Telegram. The plugin will download the file to the selected directory.
 
-### Interactive Selection
+### Interactive Selection (yt-dlp)
 
 After sending a URL, you can:
 1. Reply with a number (1, 2, 3...) to select a download directory

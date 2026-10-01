@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-10-01
+
+### Changed
+- Merged `/video`, `/audio`, and `/image` commands into a single `/dl` command.
+- The plugin now auto-detects gallery-dl sites from the uploaded gallery-dl config file and routes matching URLs directly to gallery-dl without an interactive menu.
+- Kemono URLs continue to route to ktoolbox automatically.
+- All other URLs go through the yt-dlp path with the existing interactive folder/config selection menu (video/audio choice).
+
+### Removed
+- Removed `/video`, `/audio`, and `/image` commands. Use `/dl` instead.
+
 ## [1.4.1] - 2026-08-12
 
 ### Fixed

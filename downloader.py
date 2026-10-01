@@ -20,6 +20,224 @@ import httpx
 from astrbot.api import logger
 
 KEMONO_HOSTS = {"kemono.su", "kemono.cr", "kemono.party"}
+
+# gallery-dl category names that differ from their domain.
+# Categories not listed here are assumed to match "<category>.com".
+GALLERY_DL_CATEGORY_DOMAINS: dict[str, list[str]] = {
+    "2chan": ["2chan.net"],
+    "2chen": ["sturdychan.help"],
+    "35photo": ["35photo.pro"],
+    "4chanarchives": ["4chanarchives.com"],
+    "4chan": ["4chan.org", "boards.4chan.org", "boards.4channel.org"],
+    "8chan": ["8ch.net", "8kun.top"],
+    "artstation": ["artstation.com", "www.artstation.com"],
+    "aryion": ["aryion.com"],
+    "bcy": ["bcy.net"],
+    "behance": ["behance.net", "www.behance.net"],
+    "blogger": ["blogger.com", "blogspot.com"],
+    "bluesky": ["bsky.app", "bsky.social"],
+    "catbox": ["catbox.moe"],
+    "cohost": ["cohost.org"],
+    "comicvine": ["comicvine.gamespot.com"],
+    "danbooru": ["danbooru.donmai.us"],
+    "derpibooru": ["derpibooru.org"],
+    "deviantart": ["deviantart.com", "www.deviantart.com"],
+    "dynastyscans": ["dynasty-scans.com"],
+    "e621": ["e621.net"],
+    "ehentai": ["e-hentai.org", "exhentai.org"],
+    "erome": ["erome.com", "www.erome.com"],
+    "exhentai": ["exhentai.org"],
+    "fallenangels": ["manga.fascans.com"],
+    "fanbox": ["fanbox.cc"],
+    "fapachi": ["fapachi.com"],
+    "fapello": ["fapello.com"],
+    "flickr": ["flickr.com", "www.flickr.com"],
+    "furaffinity": ["furaffinity.net", "www.furaffinity.net"],
+    "gelbooru": ["gelbooru.com"],
+    "hentai2read": ["hentai2read.com"],
+    "hentaicosplays": ["hentai-cosplays.com"],
+    "hentaifoundry": ["hentai-foundry.com"],
+    "hentaifox": ["hentaifox.com"],
+    "hentaihand": ["hentaihand.com"],
+    "hentaihere": ["hentaihere.com"],
+    "hentainexus": ["hentainexus.com"],
+    "hiperdex": ["hiperdex.com"],
+    "hitomi": ["hitomi.la"],
+    "hotleak": ["hotleak.vip"],
+    "idolcomplex": ["idol.sankakucomplex.com"],
+    "imagebam": ["imagebam.com"],
+    "imagechest": ["imgchest.com"],
+    "imagefap": ["imagefap.com"],
+    "imgbb": ["imgbb.com", "ibb.co"],
+    "imgbox": ["imgbox.com"],
+    "imgur": ["imgur.com", "i.imgur.com"],
+    "inkbunny": ["inkbunny.net"],
+    "instagram": ["instagram.com", "www.instagram.com"],
+    "itaku": ["itaku.ee"],
+    "kabeuchi": ["kabe-uchiroom.com"],
+    "kemonoparty": ["kemono.su", "kemono.party"],
+    "keenspot": ["keenspot.com"],
+    "khinsider": ["downloads.khinsider.com"],
+    "konachan": ["konachan.com", "konachan.net"],
+    "lemon8": ["lemon8-app.com"],
+    "lensdump": ["lensdump.com"],
+    "lexica": ["lexica.art"],
+    "lightroom": ["lightroom.adobe.com"],
+    "livedoor": ["blog.livedoor.jp"],
+    "luscious": ["luscious.net"],
+    "mangadex": ["mangadex.org"],
+    "mangahere": ["mangahere.cc"],
+    "mangakakalot": ["mangakakalot.com"],
+    "manganelo": ["manganelo.com", "chapmanganelo.com"],
+    "mangapark": ["mangapark.net"],
+    "mangasee": ["mangasee123.com"],
+    "mastodon": ["mastodon.social"],
+    "misskey": ["misskey.io", "misskey.design"],
+    "myhentaigallery": ["myhentaigallery.com"],
+    "naver": ["blog.naver.com", "post.naver.com"],
+    "naverwebtoon": ["comic.naver.com"],
+    "newgrounds": ["newgrounds.com", "www.newgrounds.com"],
+    "nhentai": ["nhentai.net"],
+    "nijie": ["nijie.info"],
+    "nitter": ["nitter.net"],
+    "nozomi": ["nozomi.la"],
+    "paheal": ["rule34.paheal.net"],
+    "patreon": ["patreon.com", "www.patreon.com"],
+    "photobucket": ["photobucket.com"],
+    "photovogue": ["vogue.com"],
+    "piczel": ["piczel.tv"],
+    "pillowfort": ["pillowfort.social"],
+    "pinterest": ["pinterest.com", "www.pinterest.com", "pin.it"],
+    "pixeldrain": ["pixeldrain.com"],
+    "pixiv": ["pixiv.net", "www.pixiv.net"],
+    "pixnet": ["pixnet.net"],
+    "plurk": ["plurk.com"],
+    "poipiku": ["poipiku.com"],
+    "pornhub": ["pornhub.com", "www.pornhub.com"],
+    "pornpics": ["pornpics.com"],
+    "postimg": ["postimg.cc", "postimages.org"],
+    "pururin": ["pururin.to"],
+    "reactor": ["joyreactor.cc", "reactor.cc"],
+    "readcomiconline": ["readcomiconline.li"],
+    "reddit": ["reddit.com", "www.reddit.com", "old.reddit.com", "i.redd.it"],
+    "redgifs": ["redgifs.com", "www.redgifs.com"],
+    "rule34": ["rule34.xxx"],
+    "rule34us": ["rule34.us"],
+    "saint": ["saint2.su"],
+    "sankaku": ["chan.sankakucomplex.com", "sankakucomplex.com"],
+    "seiga": ["seiga.nicovideo.jp"],
+    "senmanga": ["raw.senmanga.com"],
+    "simplyhentai": ["simplyhentai.org"],
+    "skeb": ["skeb.jp"],
+    "slideshare": ["slideshare.net"],
+    "smugmug": ["smugmug.com"],
+    "sogo": ["sogo.com"],
+    "subscribestar": ["subscribestar.com", "subscribestar.adult"],
+    "tapas": ["tapas.io"],
+    "tbib": ["tbib.org"],
+    "telegraph": ["telegra.ph"],
+    "threads": ["threads.net", "www.threads.net"],
+    "toyhouse": ["toyhou.se"],
+    "tsumino": ["tsumino.com"],
+    "tumblr": ["tumblr.com"],
+    "twibooru": ["twibooru.org"],
+    "twitter": ["twitter.com", "x.com", "mobile.twitter.com", "mobile.x.com"],
+    "unsplash": ["unsplash.com"],
+    "uploadir": ["uploadir.com"],
+    "urlgalleries": ["urlgalleries.net"],
+    "vipergirls": ["vipergirls.to"],
+    "vk": ["vk.com"],
+    "vsco": ["vsco.co"],
+    "wallhaven": ["wallhaven.cc"],
+    "weasyl": ["weasyl.com", "www.weasyl.com"],
+    "webmshare": ["webmshare.com"],
+    "webtoons": ["webtoons.com", "www.webtoons.com"],
+    "weibo": ["weibo.com", "weibo.cn", "m.weibo.cn"],
+    "wikifeet": ["wikifeet.com"],
+    "xvideos": ["xvideos.com", "www.xvideos.com"],
+    "yandere": ["yande.re"],
+    "zerochan": ["zerochan.net"],
+}
+
+
+def load_gallery_dl_domains(config_path: str) -> set[str]:
+    """Extract gallery-dl site domains from the user's config file.
+
+    Reads the ``extractor`` section and maps each category key to its known
+    domain(s) via ``GALLERY_DL_CATEGORY_DOMAINS``.  Categories that are not
+    recognised options (like ``user-agent``) and are not in the mapping are
+    assumed to match ``<category>.com``.
+
+    Args:
+        config_path: Path to the gallery-dl JSON config file.
+
+    Returns:
+        Set of lowercase domain names configured in the file.
+    """
+    if not config_path:
+        return set()
+
+    path = Path(config_path)
+    if not path.is_file():
+        return set()
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(f"Failed to parse gallery-dl config: {exc}")
+        return set()
+
+    extractor = data.get("extractor")
+    if not isinstance(extractor, dict):
+        return set()
+
+    # Known base-level option keys that are not category names
+    base_options = {
+        "archive",
+        "base-directory",
+        "browser",
+        "cache",
+        "cookies",
+        "cookies-update",
+        "download",
+        "extension-map",
+        "filename",
+        "directory",
+        "file-filter",
+        "image-filter",
+        "keywords-default",
+        "metadata-url",
+        "path-restrict",
+        "postprocessors",
+        "proxy",
+        "retries",
+        "skip",
+        "sleep",
+        "sleep-extractor",
+        "sleep-request",
+        "timeout",
+        "url-metadata",
+        "user-agent",
+        "verify",
+        "write-metadata",
+    }
+
+    domains: set[str] = set()
+    for key in extractor:
+        if key in base_options:
+            continue
+        # Must be a dict to be a category config block
+        value = extractor[key]
+        if not isinstance(value, dict):
+            continue
+        if key in GALLERY_DL_CATEGORY_DOMAINS:
+            domains.update(GALLERY_DL_CATEGORY_DOMAINS[key])
+        else:
+            domains.add(f"{key}.com")
+
+    return domains
+
+
 YT_DLP_JS_RUNTIMES = "node"
 YT_DLP_REMOTE_COMPONENTS = "ejs:github"
 READLINE_TIMEOUT = 180.0
